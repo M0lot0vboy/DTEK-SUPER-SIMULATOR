@@ -1,0 +1,5 @@
+[build]
+  command = "npm run build"
+  # Nitro's Netlify preset writes the client assets to dist/ and the server
+  # handler to .netlify/functions-internal (picked up automatically).
+  publish = "dist"
