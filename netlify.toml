@@ -3,3 +3,12 @@
   # Nitro's Netlify preset writes the client assets to dist/ and the server
   # handler to .netlify/functions-internal (picked up automatically).
   publish = "dist"
+
+# The stylesheet is pinned to a stable name (see vite.config.ts) so the
+# SSR-rendered <link> always matches the emitted file. Unlike hashed assets it
+# must not be cached forever — the build's generated _headers marks everything
+# under /assets/* immutable, so override it for this one file.
+[[headers]]
+  for = "/assets/styles.css"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

@@ -157,6 +157,21 @@ export default defineConfig(({ command, isPreview }) => ({
     strictPort: true,
   },
   resolve: { tsconfigPaths: true },
+  build: {
+    rollupOptions: {
+      output: {
+        // The client and SSR builds hash the stylesheet differently, so the
+        // SSR-rendered <link> points at a file the client never emitted and
+        // every deployed page loads unstyled. Pin the CSS to a stable name —
+        // both builds then reference (and the client emits) the same file.
+        assetFileNames(info) {
+          const name = Array.isArray(info.names) ? info.names[0] : info.names;
+          if (name?.endsWith(".css")) return "assets/styles[extname]";
+          return "assets/[name]-[hash][extname]";
+        },
+      },
+    },
+  },
   plugins: [
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.
