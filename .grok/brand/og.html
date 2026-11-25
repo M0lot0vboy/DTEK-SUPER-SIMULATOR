@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<style>
+
+@font-face { font-family: Unbounded; src: url("Unbounded-800.ttf") format("truetype"); font-weight: 800; font-display: block; }
+@font-face { font-family: Manrope; src: url("Manrope-600.ttf") format("truetype"); font-weight: 600; font-display: block; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: #141210; }
+body { position: relative; font-family: Unbounded, sans-serif; }
+.room { position: absolute; inset: 0; }
+.lockup {
+  position: absolute;
+  left: 0; right: 0;
+  top: 54px;
+  text-align: center;
+  z-index: 4;
+}
+h1 {
+  margin: 0;
+  font-weight: 800;
+  font-size: 122px;
+  line-height: 0.9;
+  letter-spacing: -0.035em;
+  color: #f4efe6;
+  text-shadow: 0 10px 30px rgba(0,0,0,0.45);
+}
+.row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+.rule { width: 72px; height: 3px; background: #e8a317; border-radius: 2px; }
+h2 {
+  margin: 0;
+  font-weight: 800;
+  font-size: 54px;
+  letter-spacing: 0.22em;
+  color: #e8a317;
+  text-indent: 0.22em;
+}
+.tag {
+  margin: 16px 0 0;
+  font-family: Manrope, sans-serif;
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: 0.08em;
+  color: #d9d0c2;
+}
+</style>
+</head>
+<body>
+<svg class="room" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="amb" cx="50%" cy="42%" r="55%">
+      <stop offset="0%" stop-color="#3a2a12"/>
+      <stop offset="55%" stop-color="#141210"/>
+      <stop offset="100%" stop-color="#0c0b09"/>
+    </radialGradient>
+    <radialGradient id="glowA" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e8a317" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#e8a317" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowR" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#d64545" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#d64545" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1612"/>
+      <stop offset="100%" stop-color="#0e0c0a"/>
+    </linearGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#amb)"/>
+  <rect x="0" y="470" width="1200" height="160" fill="url(#floor)"/>
+  <rect x="0" y="468" width="1200" height="3" fill="#3a342c"/>
+
+  <!-- windows -->
+  <g>
+    <rect x="48" y="36" width="250" height="168" rx="6" fill="#221c16" stroke="#3a342c" stroke-width="8"/>
+    <rect x="64" y="52" width="218" height="136" fill="#0c0b09"/>
+    <g fill="#1c1814">
+      <rect x="78" y="118" width="36" height="70"/>
+      <rect x="122" y="96" width="48" height="92"/>
+      <rect x="178" y="108" width="28" height="80"/>
+      <rect x="214" y="86" width="52" height="102"/>
+    </g>
+    <g>
+      <rect x="128" y="112" width="10" height="12" fill="#e8a317"/>
+      <rect x="148" y="132" width="10" height="12" fill="#e8a317" opacity="0.75"/>
+      <rect x="186" y="124" width="8" height="10" fill="#d64545"/>
+      <rect x="226" y="104" width="12" height="14" fill="#e8a317"/>
+      <rect x="246" y="140" width="10" height="12" fill="#f4efe6" opacity="0.85"/>
+    </g>
+    <rect x="902" y="48" width="230" height="150" rx="6" fill="#221c16" stroke="#3a342c" stroke-width="8"/>
+    <rect x="916" y="62" width="202" height="122" fill="#0c0b09"/>
+    <g fill="#1c1814">
+      <rect x="930" y="112" width="40" height="72"/>
+      <rect x="980" y="96" width="54" height="88"/>
+      <rect x="1044" y="108" width="58" height="76"/>
+    </g>
+    <rect x="992" y="114" width="12" height="14" fill="#d64545"/>
+    <rect x="1056" y="128" width="10" height="12" fill="#e8a317" opacity="0.5"/>
+  </g>
+
+  <!-- pendant lamps -->
+  <g>
+    <line x1="250" y1="0" x2="250" y2="78" stroke="#3a342c" stroke-width="3"/>
+    <ellipse cx="250" cy="108" rx="46" ry="28" fill="#e8a317" opacity="0.28" filter="url(#soft)"/>
+    <path d="M232 86 h36 l-6 28 h-24 z" fill="#e8a317"/>
+    <ellipse cx="250" cy="116" rx="10" ry="5" fill="#f4efe6"/>
+    <line x1="980" y1="0" x2="980" y2="86" stroke="#3a342c" stroke-width="3"/>
+    <ellipse cx="980" cy="118" rx="40" ry="22" fill="#d64545" opacity="0.22" filter="url(#soft)"/>
+    <path d="M964 92 h32 l-5 24 h-22 z" fill="#2a1816"/>
+    <ellipse cx="980" cy="118" rx="7" ry="4" fill="#d64545"/>
+  </g>
+
+  <ellipse cx="600" cy="520" rx="280" ry="36" fill="#000" opacity="0.35"/>
+  <circle cx="430" cy="430" r="180" fill="url(#glowR)"/>
+  <circle cx="760" cy="430" r="180" fill="url(#glowA)"/>
+
+  <circle cx="600" cy="438" r="214" fill="none" stroke="#3a342c" stroke-width="16"/>
+  <circle cx="600" cy="438" r="206" fill="none" stroke="#e8a317" stroke-width="3" opacity="0.9"/>
+  <path d="M600.0 438.0 L600.0 242.0 A196.0 196.0 0 0 1 738.6 299.4 Z" fill="#d64545"/>
+<path d="M600.0 438.0 L738.6 299.4 A196.0 196.0 0 0 1 796.0 438.0 Z" fill="#e8a317"/>
+<path d="M600.0 438.0 L796.0 438.0 A196.0 196.0 0 0 1 738.6 576.6 Z" fill="#d64545"/>
+<path d="M600.0 438.0 L738.6 576.6 A196.0 196.0 0 0 1 600.0 634.0 Z" fill="#e8a317"/>
+<path d="M600.0 438.0 L600.0 634.0 A196.0 196.0 0 0 1 461.4 576.6 Z" fill="#d64545"/>
+<path d="M600.0 438.0 L461.4 576.6 A196.0 196.0 0 0 1 404.0 438.0 Z" fill="#e8a317"/>
+<path d="M600.0 438.0 L404.0 438.0 A196.0 196.0 0 0 1 461.4 299.4 Z" fill="#d64545"/>
+<path d="M600.0 438.0 L461.4 299.4 A196.0 196.0 0 0 1 600.0 242.0 Z" fill="#e8a317"/>
+<line x1="600.0" y1="402.7" x2="600.0" y2="242.0" stroke="#141210" stroke-width="3.5"/>
+<line x1="624.9" y1="413.1" x2="738.6" y2="299.4" stroke="#141210" stroke-width="3.5"/>
+<line x1="635.3" y1="438.0" x2="796.0" y2="438.0" stroke="#141210" stroke-width="3.5"/>
+<line x1="624.9" y1="462.9" x2="738.6" y2="576.6" stroke="#141210" stroke-width="3.5"/>
+<line x1="600.0" y1="473.3" x2="600.0" y2="634.0" stroke="#141210" stroke-width="3.5"/>
+<line x1="575.1" y1="462.9" x2="461.4" y2="576.6" stroke="#141210" stroke-width="3.5"/>
+<line x1="564.7" y1="438.0" x2="404.0" y2="438.0" stroke="#141210" stroke-width="3.5"/>
+<line x1="575.1" y1="413.1" x2="461.4" y2="299.4" stroke="#141210" stroke-width="3.5"/>
+  <circle cx="600.0" cy="224.0" r="6.0" fill="#f4efe6"/>
+<circle cx="681.9" cy="240.3" r="6.0" fill="#e8a317"/>
+<circle cx="751.3" cy="286.7" r="6.0" fill="#f4efe6"/>
+<circle cx="797.7" cy="356.1" r="6.0" fill="#e8a317"/>
+<circle cx="814.0" cy="438.0" r="6.0" fill="#f4efe6"/>
+<circle cx="797.7" cy="519.9" r="6.0" fill="#e8a317"/>
+<circle cx="751.3" cy="589.3" r="6.0" fill="#f4efe6"/>
+<circle cx="681.9" cy="635.7" r="6.0" fill="#e8a317"/>
+<circle cx="600.0" cy="652.0" r="6.0" fill="#f4efe6"/>
+<circle cx="518.1" cy="635.7" r="6.0" fill="#e8a317"/>
+<circle cx="448.7" cy="589.3" r="6.0" fill="#f4efe6"/>
+<circle cx="402.3" cy="519.9" r="6.0" fill="#e8a317"/>
+<circle cx="386.0" cy="438.0" r="6.0" fill="#f4efe6"/>
+<circle cx="402.3" cy="356.1" r="6.0" fill="#e8a317"/>
+<circle cx="448.7" cy="286.7" r="6.0" fill="#f4efe6"/>
+<circle cx="518.1" cy="240.3" r="6.0" fill="#e8a317"/>
+  <circle cx="600" cy="438" r="46" fill="#141210" stroke="#e8a317" stroke-width="4"/>
+  <circle cx="600" cy="438" r="10" fill="#f4efe6"/>
+  <!-- pointer -->
+  <path d="M600 214 l18 28 h-36 z" fill="#e8a317"/>
+  <path d="M600 226 l8 14 h-16 z" fill="#f4efe6"/>
+</svg>
+<div class="lockup">
+  <h1>Рулетка</h1>
+  <div class="row"><span class="rule"></span><h2>ДТЕК</h2><span class="rule"></span></div>
+  <p class="tag">свет есть или уже нет</p>
+</div>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Рулетка ДТЕК",
+      "hasCanvas": false,
+      "bodyTextLen": 287,
+      "bodyTextHash": "3a222967586bf2fba373e6c589077d356e5a17ed8d6532414bdf90b0e36aaa87",
+      "bodyTextPrefix": "ГРАФИК НЕ ОБЕЩАН Рулетка ДТЕК Как раньше шутили про РКН — только",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/labels3.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Рулетка ДТЕК",
+      "hasCanvas": false,
+      "bodyTextLen": 270,
+      "bodyTextHash": "0785155d37a0d4f5f442d403bec248886984a18b9eedd12e511f4e98e4b2a4ff",
+      "bodyTextPrefix": "ГРАФИК НЕ ОБЕЩАН Рулетка ДТЕК Как раньше шутили про РКН — только",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/labels3-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/labels3.json"
+}

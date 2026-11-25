@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Рулетка ДТЕК",
+      "hasCanvas": false,
+      "bodyTextLen": 260,
+      "bodyTextHash": "02ed3ffb3bce77ccae3136c6605e6c67df460194abd840b458227169bc5e88aa",
+      "bodyTextPrefix": "ГРАФІК НЕ ОБІЦЯНИЙ Рулетка ДТЕК Крутиш колесо долі розетки. Або ",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/ua.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Рулетка ДТЕК",
+      "hasCanvas": false,
+      "bodyTextLen": 239,
+      "bodyTextHash": "dc91ab37e25a19748598f5ecd632e0fc0a932d11a07a15a174ae3d2eff1272e7",
+      "bodyTextPrefix": "ГРАФІК НЕ ОБІЦЯНИЙ Рулетка ДТЕК Крутиш колесо долі розетки. Або ",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/ua-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/ua.json"
+}
