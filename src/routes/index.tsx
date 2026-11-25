@@ -14,6 +14,8 @@ import { Quests } from "@/components/game/quests";
 import { Ranking } from "@/components/game/ranking";
 import { Toasts } from "@/components/game/toasts";
 import { DailyModal } from "@/components/game/daily-modal";
+import { GachaPanel } from "@/components/gacha/gacha-panel";
+import { afterSpinGacha, loadoutBuffs, useGacha } from "@/lib/gacha/engine";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -128,7 +130,7 @@ function dailyPick(list: string[]): string {
   return list[Math.abs(h) % list.length]!;
 }
 
-type Tab = "gacha" | "quests" | "ranking";
+type Tab = "isekai" | "gacha" | "quests" | "ranking";
 
 function Home() {
   const [rotation, setRotation] = useState(0);
@@ -155,6 +157,7 @@ function Home() {
   const offCount = useGame((s) => s.off);
   const achievements = useGame((s) => s.achievements);
   const resin = useGame((s) => s.resin);
+  const gachaBadges = useGacha((s) => s.badges);
 
   useEffect(() => {
     migrateLegacy();
@@ -213,9 +216,10 @@ function Home() {
       window.setTimeout(() => setFlash(null), 700);
 
       const drainBase = outcome === "off" ? -15 : outcome === "blackout" ? -30 : outcome === "on" ? 8 : outcome === "generator" ? 45 : outcome === "blink" ? 3 : 0;
-      const drain = drainBase < 0 ? batteryDrain(drainBase, pet) : drainBase;
+      const drain = drainBase < 0 ? Math.round(batteryDrain(drainBase, pet) * loadoutBuffs().drain) : drainBase;
       const batteryNext = Math.min(100, Math.max(0, g.battery + drain));
       useGame.getState().completeSpin(outcome, batteryNext);
+      afterSpinGacha(outcome);
       if (batteryNext >= 100 && g.battery < 100) useGame.getState().unlock("full");
 
       const st = useGame.getState();
@@ -513,9 +517,10 @@ function Home() {
         </div>
       </section>
 
-      <nav className="relative mt-5 flex gap-2">
+      <nav className="relative mt-5 grid grid-cols-2 gap-2 sm:flex">
         {(
           [
+            ["isekai", "⚔️ ісекай"],
             ["gacha", "🎰 гача"],
             ["quests", "📜 квести"],
             ["ranking", "🏆 рейтинг"],
@@ -525,16 +530,22 @@ function Home() {
             key={id}
             type="button"
             onClick={() => setTab(id)}
-            className={`font-display min-h-11 flex-1 rounded-full border px-4 text-sm font-bold transition-colors ${
+            className={`font-display relative min-h-11 flex-1 rounded-full border px-4 text-sm font-bold transition-colors ${
               tab === id ? "border-amber/60 bg-amber/15 text-amber" : "border-line bg-surface text-muted"
             }`}
           >
             {label}
+            {id === "isekai" && tab !== "isekai" && ready && gachaBadges ? (
+              <span className="font-display absolute -top-1.5 -right-1 grid min-w-5 place-items-center rounded-full border-2 border-bg bg-off px-1 text-[10px] text-fg">
+                !
+              </span>
+            ) : null}
           </button>
         ))}
       </nav>
 
       <section className="relative mt-3">
+        {tab === "isekai" ? <GachaPanel ready={ready} /> : null}
         {tab === "gacha" ? <Gacha ready={ready} /> : null}
         {tab === "quests" ? <Quests ready={ready} /> : null}
         {tab === "ranking" ? <Ranking ready={ready} /> : null}
