@@ -14,6 +14,76 @@
   --radius: 1.1rem;
 }
 
+@keyframes ticker {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-ticker {
+  animation: ticker 48s linear infinite;
+}
+
+@keyframes flicker {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  12% {
+    opacity: 0.45;
+  }
+  14% {
+    opacity: 0.1;
+  }
+  18% {
+    opacity: 0.4;
+  }
+  55% {
+    opacity: 0.25;
+  }
+  56% {
+    opacity: 0.08;
+  }
+  60% {
+    opacity: 0.35;
+  }
+}
+
+.animate-flicker {
+  animation: flicker 2.4s linear infinite;
+}
+
+@keyframes confetti-fall {
+  from {
+    transform: translateY(-4vh) rotate(0deg);
+  }
+  to {
+    transform: translateY(112vh) rotate(540deg);
+  }
+}
+
+.animate-confetti {
+  animation: confetti-fall 2.8s linear forwards;
+}
+
+@keyframes toast-in {
+  from {
+    transform: translateY(12px) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-toast {
+  animation: toast-in 0.25s ease-out;
+}
+
 @layer base {
   html,
   body {

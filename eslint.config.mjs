@@ -13,6 +13,7 @@ export default tseslint.config(
       ".output/**",
       ".vercel/**",
       ".nitro/**",
+      ".netlify/functions-internal/**",
       "node_modules/**",
       "src/routeTree.gen.ts",
     ],
