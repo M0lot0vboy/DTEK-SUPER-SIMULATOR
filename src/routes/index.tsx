@@ -114,6 +114,18 @@ const EVENTS = [
   { title: "ЗУСТРІЧ ВІДМІНЕНА", text: "Zoom падає у всій країні однаково. Відмова зустрічі — патріотична.", delta: 0 },
 ];
 
+type SpinEventKind = "turbo" | "double" | "shield" | "golden";
+type ActiveSpinEvent = { kind: SpinEventKind; left: number };
+
+const SPIN_EVENTS: Record<SpinEventKind, { title: string; desc: string; color: string; spins: number }> = {
+  turbo: { title: "ТУРБО-ОБЕРТ", desc: "Диспетчер випив енергетик. Колесо крутиться втричі швидше.", color: "#5ec4b3", spins: 5 },
+  double: { title: "ПОДВІЙНІ кВт", desc: "Лічильник зламався на твою користь. Енергія ×2.", color: "#e8a317", spins: 4 },
+  shield: { title: "ЩИТ ПАВЕРБАНКА", desc: "Сусід поділився зарядкою. Батарея не сідає.", color: "#7dd694", spins: 3 },
+  golden: { title: "ЗОЛОТА ГОДИНА", desc: "ДТЕК забув про твою вулицю. Тільки світло і генератори.", color: "#ffd36b", spins: 2 },
+};
+const SPIN_EVENT_KINDS = Object.keys(SPIN_EVENTS) as SpinEventKind[];
+const SPIN_EVENT_CHANCE = 0.18;
+
 const OFF_BONUS = ["свічка +1", "плед уже гріється", "ліхтарик на 12%", "сусід кричить «знову»"];
 const ON_BONUS = ["чайник дозволено", "вайфай ще дихає", "серіал не обірветься", "зарядка святкує"];
 
@@ -148,6 +160,8 @@ function Home() {
   const [confetti, setConfetti] = useState(false);
   const [event, setEvent] = useState<(typeof EVENTS)[number] | null>(null);
   const [tab, setTab] = useState<Tab>("gacha");
+  const [spinEvent, setSpinEvent] = useState<ActiveSpinEvent | null>(null);
+  const [spinMs, setSpinMs] = useState(4600);
   const timer = useRef<number | null>(null);
 
   const pet = useGame((s) => s.pet);
@@ -177,9 +191,13 @@ function Home() {
     if (spinning || blackout || doom || !ready) return;
     const g = useGame.getState();
 
-    const index = Math.floor(Math.random() * SLICES.length);
+    const active = spinEvent;
+    const goldenSlices = SLICES.map((s, i) => (s.id === "on" || s.id === "generator" ? i : -1)).filter((i) => i >= 0);
+    const index =
+      active?.kind === "golden" ? pick(goldenSlices) : Math.floor(Math.random() * SLICES.length);
     const outcome = SLICES[index].id;
-    const turns = 5 + Math.floor(Math.random() * 3);
+    const turbo = active?.kind === "turbo";
+    const turns = (turbo ? 3 : 5) + Math.floor(Math.random() * 3);
     const jitter = (Math.random() - 0.5) * (30 * 0.5);
     const currentMod = ((rotation % 360) + 360) % 360;
     const desiredMod = (((360 - (index * 30 + 15) + jitter) % 360) + 360) % 360;
@@ -194,13 +212,14 @@ function Home() {
     setEvent(null);
     setRotation(next);
 
-    const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 80 : 4600;
+    const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 80 : turbo ? 1300 : 4600;
+    setSpinMs(duration);
     let clicks = 0;
     const clickTimer = window.setInterval(() => {
       clicks += 1;
       tick(180 + (clicks % 4) * 40, 0.03);
       if (clicks > 18) window.clearInterval(clickTimer);
-    }, 180);
+    }, turbo ? 70 : 180);
 
     timer.current = window.setTimeout(() => {
       window.clearInterval(clickTimer);
@@ -210,9 +229,30 @@ function Home() {
       window.setTimeout(() => setFlash(null), 700);
 
       const drainBase = outcome === "off" ? -15 : outcome === "blackout" ? -30 : outcome === "on" ? 8 : outcome === "generator" ? 45 : outcome === "blink" ? 3 : 0;
-      const drain = drainBase < 0 ? Math.round(batteryDrain(drainBase, pet) * loadoutBuffs().drain) : drainBase;
+      const shielded = active?.kind === "shield";
+      const drain =
+        drainBase < 0
+          ? shielded
+            ? 0
+            : Math.round(batteryDrain(drainBase, pet) * loadoutBuffs().drain)
+          : drainBase;
       const batteryNext = Math.min(100, Math.max(0, g.battery + drain));
+      const kwBefore = useGame.getState().kw;
       useGame.getState().completeSpin(outcome, batteryNext);
+      if (active?.kind === "double") {
+        const gained = useGame.getState().kw - kwBefore;
+        if (gained > 0) useGame.setState((s) => ({ kw: s.kw + gained }));
+      }
+
+      if (active) {
+        setSpinEvent(active.left > 1 ? { kind: active.kind, left: active.left - 1 } : null);
+      } else if (outcome !== "respin" && outcome !== "blackout" && Math.random() < SPIN_EVENT_CHANCE) {
+        const kind = pick(SPIN_EVENT_KINDS);
+        const def = SPIN_EVENTS[kind];
+        setSpinEvent({ kind, left: def.spins });
+        chord();
+        useGame.getState().pushToast(def.title, `${def.desc} (${def.spins} обертів)`, def.color);
+      }
       afterSpinGacha(outcome);
       if (batteryNext >= 100 && g.battery < 100) useGame.getState().unlock("full");
 
@@ -409,6 +449,27 @@ function Home() {
           ) : null}
         </div>
 
+        {spinEvent ? (
+          <div
+            className="animate-toast mb-3 flex w-full max-w-md items-center justify-between gap-3 rounded-xl border px-3 py-2"
+            style={{ borderColor: `${SPIN_EVENTS[spinEvent.kind].color}80`, background: `${SPIN_EVENTS[spinEvent.kind].color}14` }}
+            role="status"
+          >
+            <div className="min-w-0">
+              <p className="font-display text-xs tracking-widest uppercase" style={{ color: SPIN_EVENTS[spinEvent.kind].color }}>
+                подія: {SPIN_EVENTS[spinEvent.kind].title}
+              </p>
+              <p className="truncate text-[11px] text-muted">{SPIN_EVENTS[spinEvent.kind].desc}</p>
+            </div>
+            <span
+              className="font-display shrink-0 rounded-full bg-ink px-2 py-1 text-xs"
+              style={{ color: SPIN_EVENTS[spinEvent.kind].color }}
+            >
+              ×{spinEvent.left}
+            </span>
+          </div>
+        ) : null}
+
         <div className="relative aspect-square w-full max-w-[min(100%,26rem)]">
           <div className="absolute top-0 left-1/2 z-20 -translate-x-1/2 -translate-y-1">
             <div className="h-0 w-0 border-x-[14px] border-t-[26px] border-x-transparent border-t-amber drop-shadow-[0_6px_0_#1a1612]" />
@@ -418,7 +479,7 @@ function Home() {
             className={`absolute inset-3 rounded-full border border-line bg-ink shadow-[0_20px_60px_rgba(0,0,0,0.45)] ${dark ? "animate-flicker opacity-30" : ""}`}
             style={{
               transform: `rotate(${rotation}deg)`,
-              transition: spinning ? "transform 4.6s cubic-bezier(0.12, 0.72, 0.08, 1)" : "none",
+              transition: spinning ? `transform ${spinMs}ms cubic-bezier(0.12, 0.72, 0.08, 1)` : "none",
             }}
           >
             <svg viewBox="0 0 100 100" className="h-full w-full">
