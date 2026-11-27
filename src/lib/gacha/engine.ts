@@ -20,21 +20,21 @@ export const SOFT_PITY = 74;
 export const HARD_PITY = 90;
 export const PITY_4 = 10;
 export const MAX_LOADOUT = 3;
-export const AID_AMOUNT = 320;
-export const AID_COOLDOWN_MS = 5 * 60_000;
-export const SHARDS_PER_TICKET = 20;
+export const AID_AMOUNT = 480;
+export const AID_COOLDOWN_MS = 3 * 60_000;
+export const SHARDS_PER_TICKET = 14;
 export const ROOK_COOLDOWN_MS = 10 * 60_000;
 export const ROOK_BOOST_SPINS = 5;
 
 const SHARDS_FOR_DUPE: Record<Rarity, number> = { 3: 2, 4: 8, 5: 40 };
 
 const GEMS_PER_OUTCOME: Record<Outcome, number> = {
-  off: 30,
-  on: 40,
-  blink: 50,
-  blackout: 80,
-  generator: 120,
-  respin: 20,
+  off: 50,
+  on: 65,
+  blink: 80,
+  blackout: 130,
+  generator: 200,
+  respin: 35,
 };
 
 export type PullOutcome = {
@@ -370,8 +370,8 @@ export function afterSpinGacha(outcome: Outcome): void {
     game.applyBatteryDelta(buffs.onBonus);
   }
   if (outcome !== "respin" && buffs.refund > 0 && Math.random() < buffs.refund) {
-    game.refundResin();
-    game.pushToast("Загін повернув стабільність", `+1 стабільність · +${gained} кВт-гемів`, "#a879f0");
+    useGacha.setState((s) => ({ gems: s.gems + gained }));
+    game.pushToast("Загін подвоїв видобуток", `+${gained * 2} кВт-гемів`, "#a879f0");
   }
   if (buffs.queue && Math.random() < 0.25) {
     game.applyBatteryDelta(20);
@@ -396,7 +396,6 @@ export function flexText(state: GachaState): string {
   }
   lines.push(`Гарант 5★: ${state.pity5}/${HARD_PITY}${state.guaranteed ? " · наступний 5★ — рекомендований" : ""}`);
   lines.push(`Програно 50/50: ${state.lost5050Count}`);
-  lines.push(`Витрачено фейкових грошей: $${state.fakeMoney.toFixed(2)}`);
   lines.push("Світла досі нема. Але є ТУРА?");
   return lines.join("\n");
 }

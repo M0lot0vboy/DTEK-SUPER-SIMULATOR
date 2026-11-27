@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 import { useGame } from "@/lib/game/store";
-import { RESIN_MAX, RESIN_REGEN_MS, levelFromXp, titleFor, xpForLevel } from "@/lib/game/data";
+import { levelFromXp, titleFor, xpForLevel } from "@/lib/game/data";
 
 const PET_EMOJI: Record<string, string> = { cat: "🐈‍⬛", hamster: "🐹", dove: "🕊️" };
 
 export function Hud({ ready }: { ready: boolean }) {
   const kw = useGame((s) => s.kw);
   const xp = useGame((s) => s.xp);
-  const resin = useGame((s) => s.resin);
-  const resinAt = useGame((s) => s.resinAt);
   const pet = useGame((s) => s.pet);
   const [, setNow] = useState(0);
 
@@ -23,7 +21,6 @@ export function Hud({ ready }: { ready: boolean }) {
   const nextXp = xpForLevel(level + 1);
   const progress =
     level >= 10 ? 100 : Math.min(100, Math.round(((xp - prevXp) / Math.max(1, nextXp - prevXp)) * 100));
-  const seconds = resinAt ? Math.max(0, Math.ceil((resinAt + RESIN_REGEN_MS - Date.now()) / 1000)) : 0;
 
   return (
     <section className="relative mb-4 flex items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-2.5">
@@ -46,10 +43,6 @@ export function Hud({ ready }: { ready: boolean }) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5 text-xs">
-        <span title="стабільність: +1 на хвилину, потрібна на крутку" className="flex items-center gap-1 rounded-full border border-line bg-ink px-2 py-1">
-          🌿 <span className="font-display text-amber">{ready ? resin : RESIN_MAX}/{RESIN_MAX}</span>
-          {ready && resin < RESIN_MAX && seconds > 0 ? <span className="text-[9px] text-muted">+1 {seconds}с</span> : null}
-        </span>
         <span title="кВт·год — валюта для гачі" className="flex items-center gap-1 rounded-full border border-line bg-ink px-2 py-1">
           ⚡ <span className="font-display text-amber">{ready ? kw : 0}</span>
         </span>

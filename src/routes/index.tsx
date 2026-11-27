@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Zap, ZapOff, Plug, Sparkles } from "lucide-react";
 import {
-  RESIN_MAX,
   todayKey,
   type Outcome,
 } from "@/lib/game/data";
@@ -156,7 +155,6 @@ function Home() {
   const spins = useGame((s) => s.spins);
   const offCount = useGame((s) => s.off);
   const achievements = useGame((s) => s.achievements);
-  const resin = useGame((s) => s.resin);
   const gachaBadges = useGacha((s) => s.badges);
 
   useEffect(() => {
@@ -178,10 +176,6 @@ function Home() {
   function spin() {
     if (spinning || blackout || doom || !ready) return;
     const g = useGame.getState();
-    if (!g.spendResin()) {
-      g.pushToast("СТАБІЛЬНІСТЬ 0/" + RESIN_MAX, "Відновлюється: +1 на хвилину. Мйтеся, читайте.", "#d64545");
-      return;
-    }
 
     const index = Math.floor(Math.random() * SLICES.length);
     const outcome = SLICES[index].id;
@@ -262,8 +256,7 @@ function Home() {
           tick(330, 0.12);
           setNote(pick(RESPIN_NOTES));
           setBonus("безкоштовний оберт");
-          useGame.getState().refundResin();
-          useGame.getState().pushToast("Графік зник", "Стабільність повернули. Оберт безкоштовний.", "#a99cee");
+          useGame.getState().pushToast("Графік зник", "Оберт безкоштовний. Крути ще.", "#a99cee");
           break;
       }
 
@@ -441,10 +434,10 @@ function Home() {
         <button
           type="button"
           onClick={spin}
-          disabled={spinning || blackout || doom || !ready || resin < 1}
+          disabled={spinning || blackout || doom || !ready}
           className="font-display relative z-10 mt-8 min-h-14 w-full max-w-xs rounded-full bg-amber px-8 text-base font-extrabold tracking-wide text-ink transition-transform enabled:hover:scale-[1.02] enabled:active:scale-[0.98] disabled:opacity-60"
         >
-          {spinning ? "рахуємо графік…" : resin < 1 ? "стабільність 0/8" : result ? "ще раз" : "крутити"}
+          {spinning ? "рахуємо графік…" : result ? "ще раз" : "крутити"}
         </button>
 
         <div className="mt-6 min-h-32 w-full max-w-md text-center" aria-live="polite">
