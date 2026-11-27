@@ -150,6 +150,7 @@ export default defineConfig(({ command, isPreview }) => ({
     host: "0.0.0.0",
     port: 8080,
     strictPort: true,
+    allowedHosts: ["sb-4ffq3o62wyhe.vercel.run"],
   },
   preview: {
     host: "127.0.0.1",
