@@ -9,6 +9,7 @@ import type { Sql } from "./db.ts";
 import { publicPlayerId, sha256Hex } from "./crypto-hash.ts";
 import { SEASON } from "./game/season.ts";
 import {
+  BAN_ERROR_PREFIX,
   cleanPlayerName,
   executeClearBlackout,
   executeServerAid,
@@ -19,6 +20,9 @@ import {
   executeServerSpin,
   fetchLeaderboard,
   initPlayerSession,
+  loginPlayerAccount,
+  logoutPlayerAccount,
+  registerPlayerAccount,
   updatePlayerName,
 } from "./anticheat.server.ts";
 
@@ -42,6 +46,7 @@ async function createTestSql(): Promise<Sql> {
     "0003_leaderboard_season.sql",
     "0004_anticheat.sql",
     "0005_admin_and_bans.sql",
+    "0006_spin_turbo_and_accounts.sql",
   ]) {
     await pg.exec(readFileSync(join(ROOT, "migrations", file), "utf8"));
   }
@@ -221,6 +226,7 @@ describe("DTEK anticheat", () => {
     );
     await pg.exec(readFileSync(join(ROOT, "migrations", "0004_anticheat.sql"), "utf8"));
     await pg.exec(readFileSync(join(ROOT, "migrations", "0005_admin_and_bans.sql"), "utf8"));
+    await pg.exec(readFileSync(join(ROOT, "migrations", "0006_spin_turbo_and_accounts.sql"), "utf8"));
     const legacySql = (async <T = Record<string, unknown>>(
       strings: TemplateStringsArray,
       ...values: unknown[]
@@ -351,6 +357,157 @@ describe("DTEK anticheat", () => {
     await assert.rejects(
       () => updatePlayerName(sql, { id, secret: makeSecret("5"), season: SEASON, name: "Hacked" }),
       /Помилка перевірки сесії/,
+    );
+  });
+
+  it("allows fast click immediately after last turbo spin without spin_too_fast false positives", async () => {
+    const id = "turbo-player-1";
+    const secret = makeSecret("6");
+    await initPlayerSession(sql, { id, secret, season: SEASON, name: "ТурбоБро" });
+
+    // Simulate active turbo event on its final spin (left = 1)
+    await sql`
+      update leaderboard_players
+      set spin_event_kind = 'turbo', spin_event_left = 1, last_spin_at = now() - interval '5 seconds'
+      where id = ${id}
+    `;
+
+    // Complete final turbo spin (consumes turbo -> nextSpinEvent becomes null)
+    const turboSpin = await executeServerSpin(sql, { id, secret, season: SEASON, seq: 0 });
+    assert.equal(turboSpin.turbo, true);
+    if (turboSpin.outcome === "blackout") {
+      // Clear blackout quickly just in case RNG lands on blackout
+      await sql`update leaderboard_players set in_blackout = false where id = ${id}`;
+    }
+
+    // Wait only 1300ms (turbo animation duration) instead of 3200ms normal cooldown!
+    await sql`update leaderboard_players set last_spin_at = now() - interval '1300 milliseconds' where id = ${id}`;
+    const postTurbo = await executeServerSpin(sql, { id, secret, season: SEASON, seq: 1 });
+    assert.equal(postTurbo.turbo, false);
+    assert.equal(postTurbo.state.spins, 2);
+
+    // Zero flags recorded on honest fast post-turbo spin
+    const rows = await sql<{ flags: number }>`select flags from leaderboard_players where id = ${id}`;
+    assert.equal(rows[0]!.flags, 0);
+
+    // Extreme sub-400ms bot spin spam still gets blocked and flagged
+    await sql`update leaderboard_players set in_blackout = false, last_spin_at = now() - interval '150 milliseconds' where id = ${id}`;
+    await assert.rejects(
+      () => executeServerSpin(sql, { id, secret, season: SEASON, seq: 2 }),
+      /Не так швидко/,
+    );
+  });
+
+  it("synchronizes existing Season 3 accounts with username+password registration, multi-device login, and logout", async () => {
+    // Existing Season 3 veteran without credentials
+    const vetId = "veteran-500-acct-1";
+    const vetSecret = makeSecret("7");
+    await sql`
+      insert into leaderboard_players (id, name, spins, level, fives, pulls, season)
+      values (${vetId}, ${"Ветеран515"}, ${515}, ${10}, ${8}, ${500}, ${SEASON})
+    `;
+
+    const synced = await initPlayerSession(sql, {
+      id: vetId,
+      secret: vetSecret,
+      season: SEASON,
+      legacy: { xp: 8100, gems: 3200 },
+    });
+    assert.equal(synced.hasAccount, false);
+    assert.equal(synced.accountUsername, null);
+    assert.equal(synced.spins, 515);
+
+    // Register links existing 515-spin progress permanently to username+password
+    const reg = await registerPlayerAccount(sql, {
+      id: vetId,
+      secret: vetSecret,
+      season: SEASON,
+      username: "Veteran_515",
+      password: "StrongPassword123",
+    });
+    assert.equal(reg.accountUsername, "Veteran_515");
+    assert.equal(reg.state.hasAccount, true);
+    assert.equal(reg.state.spins, 515);
+
+    // Case-insensitive duplicate username rejected
+    await assert.rejects(
+      () =>
+        registerPlayerAccount(sql, {
+          id: "other-player-9999",
+          secret: makeSecret("8"),
+          season: SEASON,
+          username: "veteran_515",
+          password: "AnotherPassword123",
+        }),
+      /вже зайнятий/,
+    );
+
+    // Login from Device 2 returns fresh device secret + preserves all 515 spins
+    const dev2 = await loginPlayerAccount(sql, {
+      season: SEASON,
+      username: "veteran_515",
+      password: "StrongPassword123",
+      telemetry: { ip: "198.51.100.44", userAgent: "MobilePhone/1.0" },
+    });
+    assert.equal(dev2.id, vetId);
+    assert.notEqual(dev2.secret, vetSecret);
+    assert.equal(dev2.state.spins, 515);
+    assert.equal(dev2.state.hasAccount, true);
+
+    // Both Device 1 and Device 2 can act simultaneously!
+    const spin1 = await executeServerSpin(sql, { id: vetId, secret: vetSecret, season: SEASON, seq: dev2.state.seq });
+    assert.equal(spin1.state.spins, 516);
+    await sql`update leaderboard_players set in_blackout = false, last_spin_at = now() - interval '6 seconds' where id = ${vetId}`;
+    const spin2 = await executeServerSpin(sql, { id: dev2.id, secret: dev2.secret, season: SEASON, seq: spin1.state.seq });
+    assert.equal(spin2.state.spins, 517);
+
+    // Logging out Device 2 revokes Device 2 secret cleanly while Device 1 continues working
+    await logoutPlayerAccount(sql, { id: dev2.id, secret: dev2.secret, season: SEASON });
+    await assert.rejects(
+      () => initPlayerSession(sql, { id: dev2.id, secret: dev2.secret, season: SEASON }),
+      /Помилка перевірки сесії/,
+    );
+    const dev1StillOk = await initPlayerSession(sql, { id: vetId, secret: vetSecret, season: SEASON });
+    assert.equal(dev1StillOk.spins, 517);
+
+    // Wrong password attempt counter locks out brute-force IP after 5 failures
+    for (let i = 1; i <= 5; i += 1) {
+      await assert.rejects(
+        () =>
+          loginPlayerAccount(sql, {
+            season: SEASON,
+            username: "Veteran_515",
+            password: `wrong-${i}`,
+            telemetry: { ip: "203.0.113.9" },
+          }),
+        /Невірний логін або пароль|Забагато невдалих спроб/,
+      );
+    }
+    await assert.rejects(
+      () =>
+        loginPlayerAccount(sql, {
+          season: SEASON,
+          username: "Veteran_515",
+          password: "StrongPassword123",
+          telemetry: { ip: "203.0.113.9" },
+        }),
+      /Забагато невдалих спроб/,
+    );
+
+    // Account bans also block cross-device logins cleanly
+    await sql`
+      insert into player_bans (ban_type, ban_value, player_id, player_name, reason, banned_by, active)
+      values ('ip', 'test-ban-val', ${vetId}, 'Ветеран515', 'Account banned test', 'admin', true)
+    `;
+    await assert.rejects(
+      () =>
+        loginPlayerAccount(sql, {
+          season: SEASON,
+          username: "Veteran_515",
+          password: "StrongPassword123",
+          telemetry: { ip: "198.51.100.77" },
+        }),
+      (err) => err instanceof Error && err.message.startsWith(BAN_ERROR_PREFIX),
     );
   });
 });

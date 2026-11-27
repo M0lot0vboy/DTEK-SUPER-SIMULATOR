@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 import type { Sql } from "./db.ts";
 import { publicPlayerId } from "./crypto-hash.ts";
 import {
@@ -99,6 +99,15 @@ export type PlayerSnapshot = {
   rookReadyAt: number;
   seq: number;
   demonetizedAt: number;
+  hasAccount: boolean;
+  accountUsername: string | null;
+};
+
+export type AccountAuthResult = {
+  id: string;
+  secret: string;
+  accountUsername: string;
+  state: PlayerSnapshot;
 };
 
 export type LegacySeedInput = {
@@ -159,6 +168,7 @@ export type DbPlayerRow = {
   spin_event_kind: string | null;
   spin_event_left: number;
   in_blackout: boolean;
+  last_spin_turbo?: boolean | null;
   last_spin_at: Date | string | null;
   last_aid_at: Date | string | null;
   rook_ready_at: Date | string | null;
@@ -170,6 +180,7 @@ export type DbPlayerRow = {
   pc_fp?: string | null;
   user_agent?: string | null;
   last_reset_at?: Date | string | null;
+  account_username?: string | null;
   updated_at: Date | string;
 };
 
@@ -234,10 +245,16 @@ function parseSpinEvent(kind: string | null, left: number): ActiveSpinEvent | nu
   return { kind: kind as SpinEventKind, left: Math.floor(left) };
 }
 
-export function snapshotFromRow(row: DbPlayerRow): PlayerSnapshot {
+export function snapshotFromRow(
+  row: DbPlayerRow,
+  accountUsernameOverride?: string | null,
+): PlayerSnapshot {
   const copies = sanitizeCopies(parseJsonField(row.copies));
   const loadout = sanitizeLoadout(parseJsonField(row.loadout), copies);
   const lastAidMs = toMs(row.last_aid_at);
+  const rawAcct =
+    accountUsernameOverride !== undefined ? accountUsernameOverride : (row.account_username ?? null);
+  const accountUsername = rawAcct && String(rawAcct).trim() ? String(rawAcct).trim() : null;
   return {
     season: Number(row.season),
     name: String(row.name ?? ""),
@@ -264,7 +281,65 @@ export function snapshotFromRow(row: DbPlayerRow): PlayerSnapshot {
     rookReadyAt: toMs(row.rook_ready_at),
     seq: Math.max(0, Number(row.seq ?? 0)),
     demonetizedAt: toMs(row.last_reset_at),
+    hasAccount: Boolean(accountUsername),
+    accountUsername,
   };
+}
+
+const ACCOUNT_USERNAME_RE = /^[a-zA-Z0-9_.\-\u0400-\u04FF]{3,20}$/;
+const PLAYER_SCRYPT_OPTS = { N: 16384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
+const DUMMY_ACCOUNT_HASH =
+  "scrypt-v1$00000000000000000000000000000000$" + "0".repeat(128);
+const PLAYER_SESSION_TTL_SECONDS = 90 * 24 * 60 * 60;
+const PLAYER_LOGIN_MAX_ATTEMPTS = 5;
+const PLAYER_LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+
+export function cleanAccountUsername(raw: unknown): { username: string; usernameLower: string } {
+  const s = cleanPlayerName(raw).replace(/\s+/g, "");
+  if (!ACCOUNT_USERNAME_RE.test(s)) {
+    throw new Error("Логін має бути 3–20 символів (літери, цифри, _ . -)");
+  }
+  return { username: s, usernameLower: s.toLowerCase() };
+}
+
+function assertValidPassword(raw: unknown): string {
+  const pass = String(raw ?? "");
+  if (pass.length < 6) throw new Error("Пароль має містити щонайменше 6 символів");
+  if (pass.length > 128) throw new Error("Пароль занадто довгий");
+  return pass;
+}
+
+export function hashAccountPassword(password: string): string {
+  const saltHex = randomBytes(16).toString("hex");
+  const digest = scryptSync(
+    password.normalize("NFKC"),
+    Buffer.from(`dtek-player-pw:${saltHex}`, "utf8"),
+    64,
+    PLAYER_SCRYPT_OPTS,
+  ).toString("hex");
+  return `scrypt-v1$${saltHex}$${digest}`;
+}
+
+export function verifyAccountPassword(password: string, storedHash: string): boolean {
+  const parts = storedHash.split("$");
+  const validFormat =
+    parts.length === 3 &&
+    parts[0] === "scrypt-v1" &&
+    /^[a-f0-9]{16,64}$/i.test(parts[1] ?? "") &&
+    /^[a-f0-9]{128}$/i.test(parts[2] ?? "");
+  const saltHex = validFormat ? parts[1]! : "00000000000000000000000000000000";
+  const expected = validFormat ? parts[2]!.toLowerCase() : "0".repeat(128);
+  const actual = scryptSync(
+    password.normalize("NFKC"),
+    Buffer.from(`dtek-player-pw:${saltHex}`, "utf8"),
+    64,
+    PLAYER_SCRYPT_OPTS,
+  )
+    .toString("hex")
+    .toLowerCase();
+  const a = Buffer.from(actual, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  return validFormat && a.length === b.length && timingSafeEqual(a, b);
 }
 
 function getBanSigningSecret(): string {
@@ -537,9 +612,10 @@ async function logViolation(
 
 async function selectPlayer(sql: Sql, id: string): Promise<DbPlayerRow | null> {
   const rows = await sql<DbPlayerRow>`
-    select *
-    from leaderboard_players
-    where id = ${id}
+    select p.*, pa.username as account_username
+    from leaderboard_players p
+    left join player_accounts pa on pa.player_id = p.id
+    where p.id = ${id}
     limit 1
   `;
   return rows[0] ?? null;
@@ -578,6 +654,7 @@ async function ensureNewPlayerRow(
       spin_event_kind = null,
       spin_event_left = 0,
       in_blackout = false,
+      last_spin_turbo = false,
       last_spin_at = null,
       last_aid_at = null,
       rook_ready_at = null,
@@ -696,6 +773,19 @@ async function claimLegacyRow(
   return latest;
 }
 
+async function verifySessionTokenForRow(sql: Sql, row: DbPlayerRow, tokenHash: string): Promise<boolean> {
+  if (row.token_hash && constantTimeHexEqual(row.token_hash, tokenHash)) return true;
+  const sess = await sql<{ token_hash: string }>`
+    select token_hash
+    from player_sessions
+    where token_hash = ${tokenHash}
+      and player_id = ${row.id}
+      and expires_at > now()
+    limit 1
+  `;
+  return Boolean(sess[0]);
+}
+
 async function authenticatePlayer(
   sql: Sql,
   creds: { id: string; tokenHash: string },
@@ -708,7 +798,7 @@ async function authenticatePlayer(
   }
   if (!row.token_hash) {
     row = await claimLegacyRow(sql, row, creds.tokenHash, options.legacy);
-  } else if (!constantTimeHexEqual(row.token_hash, creds.tokenHash)) {
+  } else if (!(await verifySessionTokenForRow(sql, row, creds.tokenHash))) {
     await logViolation(sql, creds.id, "bad_token", {}, true);
     throw new Error("Помилка перевірки сесії гравця");
   }
@@ -751,8 +841,16 @@ export async function updatePlayerName(
     update leaderboard_players
     set name = ${cleaned}, updated_at = now()
     where id = ${creds.id}
-      and token_hash = ${creds.tokenHash}
       and season = ${SEASON}
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
     returning *
   `;
   if (!updated[0]) {
@@ -760,7 +858,7 @@ export async function updatePlayerName(
     throw new Error("Помилка перевірки сесії гравця");
   }
   await recordPlayerTelemetry(sql, creds.id, input.telemetry);
-  return snapshotFromRow(updated[0] ?? row);
+  return snapshotFromRow(updated[0] ?? row, row.account_username ?? null);
 }
 
 export async function executeServerSpin(
@@ -782,7 +880,9 @@ export async function executeServerSpin(
 
   const activeBefore = parseSpinEvent(row.spin_event_kind, Number(row.spin_event_left ?? 0));
   const isTurbo = activeBefore?.kind === "turbo";
-  const cooldownMs = isTurbo ? SPIN_COOLDOWN_TURBO_MS : SPIN_COOLDOWN_NORMAL_MS;
+  const prevWasTurbo = Boolean(row.last_spin_turbo);
+  // Honor turbo cooldown if the PREVIOUS completed spin or CURRENT spin is turbo so the first click right after turbo finishes is never flagged.
+  const cooldownMs = isTurbo || prevWasTurbo ? SPIN_COOLDOWN_TURBO_MS : SPIN_COOLDOWN_NORMAL_MS;
 
   const sliceIndex =
     activeBefore?.kind === "golden"
@@ -825,11 +925,20 @@ export async function executeServerSpin(
       spin_event_kind = ${nextSpinEvent?.kind ?? null},
       spin_event_left = ${nextSpinEvent?.left ?? 0},
       in_blackout = ${nextInBlackout},
+      last_spin_turbo = ${isTurbo},
       last_spin_at = now(),
       seq = seq + 1,
       updated_at = now()
     where id = ${creds.id}
-      and token_hash = ${creds.tokenHash}
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
       and season = ${SEASON}
       and seq = ${seq}
       and in_blackout = false
@@ -845,7 +954,8 @@ export async function executeServerSpin(
     if (latest?.last_spin_at) {
       const elapsed = Date.now() - toMs(latest.last_spin_at);
       if (elapsed < cooldownMs) {
-        await logViolation(sql, creds.id, "spin_too_fast", { elapsed, cooldownMs }, true);
+        const severe = elapsed < cooldownMs * 0.65;
+        await logViolation(sql, creds.id, "spin_too_fast", { elapsed, cooldownMs, isTurbo, prevWasTurbo }, severe);
         throw new Error("Не так швидко! Почекай поки колесо зупиниться.");
       }
     }
@@ -866,7 +976,7 @@ export async function executeServerSpin(
     queueProc,
     activeEventBefore: activeBefore,
     nextSpinEvent,
-    state: snapshotFromRow(updated[0]),
+    state: snapshotFromRow(updated[0], row.account_username ?? null),
   };
 }
 
@@ -891,7 +1001,15 @@ export async function executeClearBlackout(
       seq = seq + 1,
       updated_at = now()
     where id = ${creds.id}
-      and token_hash = ${creds.tokenHash}
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
       and season = ${SEASON}
       and seq = ${seq}
       and in_blackout = true
@@ -906,7 +1024,7 @@ export async function executeClearBlackout(
     throw new Error("Занадто швидко! Запалюй свічку чесно.");
   }
   await recordPlayerTelemetry(sql, creds.id, input.telemetry);
-  return snapshotFromRow(updated[0]);
+  return snapshotFromRow(updated[0], row.account_username ?? null);
 }
 
 export async function executeServerPull(
@@ -966,7 +1084,15 @@ export async function executeServerPull(
       seq = seq + 1,
       updated_at = now()
     where id = ${creds.id}
-      and token_hash = ${creds.tokenHash}
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
       and season = ${SEASON}
       and seq = ${seq}
       and tickets = ${Number(row.tickets)}
@@ -976,7 +1102,7 @@ export async function executeServerPull(
   if (!updated[0]) throw new Error("CONFLICT");
 
   await recordPlayerTelemetry(sql, creds.id, input.telemetry);
-  return { results: exec.results, state: snapshotFromRow(updated[0]) };
+  return { results: exec.results, state: snapshotFromRow(updated[0], row.account_username ?? null) };
 }
 
 export async function executeServerAid(
@@ -997,7 +1123,15 @@ export async function executeServerAid(
       seq = seq + 1,
       updated_at = now()
     where id = ${creds.id}
-      and token_hash = ${creds.tokenHash}
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
       and season = ${SEASON}
       and seq = ${seq}
       and (
@@ -1011,7 +1145,7 @@ export async function executeServerAid(
     throw new Error("Аварійна допомога ще перезаряджається");
   }
   await recordPlayerTelemetry(sql, creds.id, input.telemetry);
-  return snapshotFromRow(updated[0]);
+  return snapshotFromRow(updated[0], row.account_username ?? null);
 }
 
 export async function executeServerExchange(
@@ -1032,7 +1166,15 @@ export async function executeServerExchange(
       seq = seq + 1,
       updated_at = now()
     where id = ${creds.id}
-      and token_hash = ${creds.tokenHash}
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
       and season = ${SEASON}
       and seq = ${seq}
       and shards >= ${SHARDS_PER_TICKET}
@@ -1040,7 +1182,7 @@ export async function executeServerExchange(
   `;
   if (!updated[0]) throw new Error("Мало копіуму для обміну");
   await recordPlayerTelemetry(sql, creds.id, input.telemetry);
-  return snapshotFromRow(updated[0]);
+  return snapshotFromRow(updated[0], row.account_username ?? null);
 }
 
 export async function executeServerEquip(
@@ -1086,14 +1228,22 @@ export async function executeServerEquip(
       seq = seq + 1,
       updated_at = now()
     where id = ${creds.id}
-      and token_hash = ${creds.tokenHash}
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
       and season = ${SEASON}
       and seq = ${seq}
     returning *
   `;
   if (!updated[0]) throw new Error("CONFLICT");
   await recordPlayerTelemetry(sql, creds.id, input.telemetry);
-  return { status, state: snapshotFromRow(updated[0]) };
+  return { status, state: snapshotFromRow(updated[0], row.account_username ?? null) };
 }
 
 export async function executeServerRook(
@@ -1121,7 +1271,15 @@ export async function executeServerRook(
       seq = seq + 1,
       updated_at = now()
     where id = ${creds.id}
-      and token_hash = ${creds.tokenHash}
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
       and season = ${SEASON}
       and seq = ${seq}
       and (rook_ready_at is null or rook_ready_at <= now())
@@ -1129,7 +1287,7 @@ export async function executeServerRook(
   `;
   if (!updated[0]) throw new Error("Тура ще відновлюється");
   await recordPlayerTelemetry(sql, creds.id, input.telemetry);
-  return snapshotFromRow(updated[0]);
+  return snapshotFromRow(updated[0], row.account_username ?? null);
 }
 
 export async function fetchLeaderboard(sql: Sql): Promise<LeaderRow[]> {
@@ -1177,4 +1335,216 @@ export async function fetchLeaderboard(sql: Sql): Promise<LeaderRow[]> {
     verified: Boolean(r.token_hash),
     updatedAt: new Date(r.updated_at).toISOString(),
   }));
+}
+
+export async function registerPlayerAccount(
+  sql: Sql,
+  input: {
+    id: string;
+    secret: string;
+    season: number;
+    username: unknown;
+    password: unknown;
+    name?: unknown;
+    legacy?: LegacySeedInput;
+    telemetry?: TelemetryContext;
+  },
+): Promise<AccountAuthResult> {
+  const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
+  const { username, usernameLower } = cleanAccountUsername(input.username);
+  const password = assertValidPassword(input.password);
+
+  const preferredName = cleanPlayerName(input.name);
+  const rowName = preferredName.length >= 2 ? preferredName : cleanPlayerName(username);
+
+  const row = await authenticatePlayer(sql, creds, {
+    createIfMissing: true,
+    name: rowName,
+    legacy: input.legacy,
+  });
+
+  if (row.account_username) {
+    throw new Error(`Цей профіль вже прив'язаний до акаунту @${row.account_username}`);
+  }
+
+  const existingUser = await sql<{ username: string }>`
+    select username from player_accounts where username_lower = ${usernameLower} limit 1
+  `;
+  if (existingUser[0]) {
+    throw new Error("Цей логін вже зайнятий");
+  }
+
+  const passwordHash = hashAccountPassword(password);
+  try {
+    await sql`
+      insert into player_accounts (username_lower, username, password_hash, player_id)
+      values (${usernameLower}, ${username}, ${passwordHash}, ${creds.id})
+    `;
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code === "23505") throw new Error("Цей логін вже зайнятий");
+    throw err;
+  }
+
+  const ip = normalizeIp(input.telemetry?.ip);
+  const ipHash = ip ? hashIp(ip) : null;
+  const ua = cleanUserAgent(input.telemetry?.userAgent);
+  await sql`
+    insert into player_sessions (token_hash, player_id, ip_hash, user_agent, expires_at)
+    values (
+      ${creds.tokenHash},
+      ${creds.id},
+      ${ipHash},
+      ${ua},
+      now() + (${PLAYER_SESSION_TTL_SECONDS}::double precision * interval '1 second')
+    )
+    on conflict (token_hash) do update set
+      expires_at = excluded.expires_at,
+      ip_hash = coalesce(excluded.ip_hash, player_sessions.ip_hash)
+  `;
+
+  // Move single-secret token_hash to a non-matching locked sentinel so per-device logout invalidates secrets.
+  const lockedSentinel = createHash("sha256")
+    .update(`acct-locked:${randomBytes(24).toString("hex")}`)
+    .digest("hex");
+  const finalName = String(row.name ?? "").trim().length >= 2 ? String(row.name) : rowName;
+  const updated = await sql<DbPlayerRow>`
+    update leaderboard_players
+    set
+      token_hash = ${lockedSentinel},
+      name = ${finalName},
+      updated_at = now()
+    where id = ${creds.id}
+    returning *
+  `;
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+  const finalRow = updated[0] ?? row;
+  return {
+    id: creds.id,
+    secret: creds.secret,
+    accountUsername: username,
+    state: snapshotFromRow(finalRow, username),
+  };
+}
+
+export async function loginPlayerAccount(
+  sql: Sql,
+  input: {
+    season: number;
+    username: unknown;
+    password: unknown;
+    telemetry?: TelemetryContext;
+  },
+): Promise<AccountAuthResult> {
+  if (Number(input.season) !== SEASON) {
+    throw new Error("Сезон застарів — онови сторінку");
+  }
+  const { usernameLower } = cleanAccountUsername(input.username);
+  const password = String(input.password ?? "");
+  if (!password) throw new Error("Введи пароль");
+
+  const normIp = normalizeIp(input.telemetry?.ip) ?? "unknown";
+  const attemptIpHash = hashIp(`player-login:${normIp}`);
+
+  const attemptRows = await sql<{ attempts: number; locked_until: Date | string | null }>`
+    select attempts, locked_until
+    from player_login_attempts
+    where ip_hash = ${attemptIpHash}
+    limit 1
+  `;
+  const existingAttempt = attemptRows[0];
+  if (existingAttempt?.locked_until) {
+    const remainingMs = new Date(existingAttempt.locked_until).getTime() - Date.now();
+    if (remainingMs > 0) {
+      const mins = Math.max(1, Math.ceil(remainingMs / 60_000));
+      throw new Error(`Забагато невдалих спроб входу. Спробуй через ${mins} хв.`);
+    }
+  }
+
+  const rows = await sql<
+    DbPlayerRow & { account_pw_hash: string; account_name: string }
+  >`
+    select p.*, pa.username as account_name, pa.password_hash as account_pw_hash
+    from player_accounts pa
+    join leaderboard_players p on p.id = pa.player_id
+    where pa.username_lower = ${usernameLower}
+    limit 1
+  `;
+  const found = rows[0];
+  const passOk = found
+    ? verifyAccountPassword(password, found.account_pw_hash)
+    : (verifyAccountPassword(password, DUMMY_ACCOUNT_HASH), false);
+
+  if (!found || !passOk) {
+    const nextRows = await sql<{ attempts: number; locked_until: Date | string | null }>`
+      insert into player_login_attempts (ip_hash, attempts, locked_until, updated_at)
+      values (${attemptIpHash}, 1, null, now())
+      on conflict (ip_hash) do update set
+        attempts = case
+          when player_login_attempts.updated_at < now() - (${PLAYER_LOGIN_LOCKOUT_MS}::double precision * interval '1 millisecond')
+            then 1
+          else player_login_attempts.attempts + 1
+        end,
+        locked_until = case
+          when (
+            case
+              when player_login_attempts.updated_at < now() - (${PLAYER_LOGIN_LOCKOUT_MS}::double precision * interval '1 millisecond')
+                then 1
+              else player_login_attempts.attempts + 1
+            end
+          ) >= ${PLAYER_LOGIN_MAX_ATTEMPTS}
+            then now() + (${PLAYER_LOGIN_LOCKOUT_MS}::double precision * interval '1 millisecond')
+          else null
+        end,
+        updated_at = now()
+      returning attempts, locked_until
+    `;
+    const attemptsNow = Number(nextRows[0]?.attempts ?? 1);
+    if (nextRows[0]?.locked_until && new Date(nextRows[0].locked_until).getTime() > Date.now()) {
+      throw new Error("Забагато невдалих спроб (5). Спробуй через 15 хв.");
+    }
+    throw new Error(`Невірний логін або пароль (спроба ${attemptsNow}/${PLAYER_LOGIN_MAX_ATTEMPTS})`);
+  }
+
+  await sql`delete from player_login_attempts where ip_hash = ${attemptIpHash}`;
+  await assertNotBanned(sql, { ...input.telemetry, playerId: found.id });
+
+  const newSecret = randomBytes(32).toString("hex");
+  const newTokenHash = hashSecret(newSecret);
+  const ipHash = normalizeIp(input.telemetry?.ip) ? hashIp(normalizeIp(input.telemetry?.ip)!) : null;
+  const ua = cleanUserAgent(input.telemetry?.userAgent);
+
+  await sql`delete from player_sessions where expires_at <= now()`;
+  await sql`
+    insert into player_sessions (token_hash, player_id, ip_hash, user_agent, expires_at)
+    values (
+      ${newTokenHash},
+      ${found.id},
+      ${ipHash},
+      ${ua},
+      now() + (${PLAYER_SESSION_TTL_SECONDS}::double precision * interval '1 second')
+    )
+  `;
+
+  await recordPlayerTelemetry(sql, found.id, input.telemetry);
+  return {
+    id: found.id,
+    secret: newSecret,
+    accountUsername: found.account_name,
+    state: snapshotFromRow(found, found.account_name),
+  };
+}
+
+export async function logoutPlayerAccount(
+  sql: Sql,
+  input: { id: string; secret: string; season: number },
+): Promise<{ ok: true }> {
+  const creds = assertValidCredentials(input);
+  await sql`
+    delete from player_sessions
+    where player_id = ${creds.id}
+      and token_hash = ${creds.tokenHash}
+  `;
+  return { ok: true };
 }

@@ -1,14 +1,22 @@
 import { useEffect, useState } from "react";
-import { Zap } from "lucide-react";
+import { UserCheck, UserPlus, Zap } from "lucide-react";
 import { useGame } from "@/lib/game/store";
 import { levelFromXp, titleFor, xpForLevel } from "@/lib/game/data";
+import { usePlayer } from "@/lib/game/player";
 
 const PET_EMOJI: Record<string, string> = { cat: "🐈‍⬛", hamster: "🐹", dove: "🕊️" };
 
-export function Hud({ ready }: { ready: boolean }) {
+export function Hud({
+  ready,
+  onOpenAccount,
+}: {
+  ready: boolean;
+  onOpenAccount?: () => void;
+}) {
   const kw = useGame((s) => s.kw);
   const xp = useGame((s) => s.xp);
   const pet = useGame((s) => s.pet);
+  const accountUsername = usePlayer((s) => s.accountUsername);
   const [, setNow] = useState(0);
 
   useEffect(() => {
@@ -43,15 +51,41 @@ export function Hud({ ready }: { ready: boolean }) {
           <div className="h-full rounded-full bg-amber transition-all duration-500" style={{ width: `${ready ? progress : 0}%` }} />
         </div>
       </div>
-      <div className="ml-auto flex shrink-0 flex-col items-end">
-        <span
-          title="кВт·год — енергія для гачі"
-          className="flex items-center gap-1 rounded-full border border-amber/50 bg-ink px-2 py-1"
-        >
-          <Zap className="size-3.5 fill-amber text-amber" aria-hidden />
-          <span className="font-display text-sm text-amber">{ready ? kw : 0}</span>
-        </span>
-        <span className="mt-0.5 text-[9px] tracking-widest text-muted uppercase">енергія кВт</span>
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {ready && onOpenAccount ? (
+          <button
+            type="button"
+            onClick={onOpenAccount}
+            title={accountUsername ? `Акаунт @${accountUsername}` : "Створити акаунт або увійти"}
+            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+              accountUsername
+                ? "border-on/40 bg-on/10 text-on hover:bg-on/20"
+                : "border-amber/45 bg-amber/10 text-amber hover:bg-amber/20"
+            }`}
+          >
+            {accountUsername ? (
+              <>
+                <UserCheck className="size-3.5 shrink-0" aria-hidden />
+                <span className="hidden max-w-24 truncate min-[430px]:inline">@{accountUsername}</span>
+              </>
+            ) : (
+              <>
+                <UserPlus className="size-3.5 shrink-0" aria-hidden />
+                <span className="hidden min-[430px]:inline">Акаунт</span>
+              </>
+            )}
+          </button>
+        ) : null}
+        <div className="flex flex-col items-end">
+          <span
+            title="кВт·год — енергія для гачі"
+            className="flex items-center gap-1 rounded-full border border-amber/50 bg-ink px-2 py-1"
+          >
+            <Zap className="size-3.5 fill-amber text-amber" aria-hidden />
+            <span className="font-display text-sm text-amber">{ready ? kw : 0}</span>
+          </span>
+          <span className="mt-0.5 text-[9px] tracking-widest text-muted uppercase">енергія кВт</span>
+        </div>
       </div>
     </section>
   );

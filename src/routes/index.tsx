@@ -19,6 +19,7 @@ import { Quests } from "@/components/game/quests";
 import { Ranking } from "@/components/game/ranking";
 import { Toasts } from "@/components/game/toasts";
 import { DailyModal } from "@/components/game/daily-modal";
+import { AccountModal } from "@/components/game/account-modal";
 import { GachaPanel } from "@/components/gacha/gacha-panel";
 import { loadoutBuffs, useGacha } from "@/lib/gacha/engine";
 import {
@@ -27,6 +28,7 @@ import {
   performClearBlackout,
   performSpin,
   useBanState,
+  usePlayer,
   useSeasonGuard,
   useSessionSync,
 } from "@/lib/game/player";
@@ -136,7 +138,10 @@ function Home() {
   const [result, setResult] = useState<Outcome | null>(null);
   const [ready, setReady] = useState(false);
   const [showDaily, setShowDaily] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
+  const [syncChecked, setSyncChecked] = useState(false);
   useSessionSync(ready, (snap) => {
+    setSyncChecked(true);
     if (snap.inBlackout) setBlackout(true);
     if (snap.spinEvent) setSpinEvent(snap.spinEvent);
   });
@@ -164,6 +169,29 @@ function Home() {
   const achievements = useGame((s) => s.achievements);
   const gachaBadges = useGacha((s) => s.badges);
   const ban = useBanState();
+  const accountUsername = usePlayer((s) => s.accountUsername);
+  const playerRegistered = usePlayer((s) => s.registered);
+
+  useEffect(() => {
+    if (!ready || !ban.checked || ban.banned || showDaily || accountUsername) return;
+    const hasActivity = syncChecked || playerRegistered || spins > 0;
+    if (!hasActivity) return;
+    try {
+      if (window.sessionStorage.getItem("dtek-acct-prompt-dismissed") === "1") return;
+    } catch {
+      // sessionStorage unavailable
+    }
+    setShowAccount(true);
+  }, [ready, ban.checked, ban.banned, showDaily, accountUsername, syncChecked, playerRegistered, spins]);
+
+  function closeAccountModal() {
+    setShowAccount(false);
+    try {
+      window.sessionStorage.setItem("dtek-acct-prompt-dismissed", "1");
+    } catch {
+      // Ignore storage error
+    }
+  }
 
   useEffect(() => {
     migrateLegacy();
@@ -478,6 +506,7 @@ function Home() {
         </div>
       ) : null}
       {showDaily && ready ? <DailyModal onClaim={() => setShowDaily(false)} /> : null}
+      {ready ? <AccountModal open={showAccount} onClose={closeAccountModal} /> : null}
 
       <div
         aria-hidden
@@ -503,7 +532,7 @@ function Home() {
         </div>
       </div>
 
-      <Hud ready={ready} />
+      <Hud ready={ready} onOpenAccount={() => setShowAccount(true)} />
 
       <section className="relative flex flex-1 flex-col items-center">
         <div className="mb-5 w-full max-w-md">
@@ -682,7 +711,7 @@ function Home() {
         {tab === "isekai" ? <GachaPanel ready={ready} /> : null}
         {tab === "gacha" ? <Gacha ready={ready} /> : null}
         {tab === "quests" ? <Quests ready={ready} /> : null}
-        {tab === "ranking" ? <Ranking ready={ready} /> : null}
+        {tab === "ranking" ? <Ranking ready={ready} onOpenAccount={() => setShowAccount(true)} /> : null}
       </section>
 
       <footer className="relative mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-center text-[11px] text-muted">

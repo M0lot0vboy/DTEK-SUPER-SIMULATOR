@@ -54,6 +54,7 @@ export type AdminPlayerSummary = {
   id: string;
   publicId: string;
   name: string;
+  accountUsername: string | null;
   spins: number;
   xp: number;
   level: number;
@@ -124,6 +125,7 @@ export type AdminSpectateData = {
   id: string;
   publicId: string;
   name: string;
+  accountUsername: string | null;
   season: number;
   verified: boolean;
   online: boolean;
@@ -501,10 +503,11 @@ export async function getAdminDashboard(
   options: { search?: string; sort?: "spins" | "flags" | "updated" | "pulls" } = {},
 ): Promise<AdminDashboardData> {
   const playerRows = await sql<DbPlayerRow>`
-    select *
-    from leaderboard_players
-    where season = ${SEASON}
-    order by updated_at desc
+    select p.*, pa.username as account_username
+    from leaderboard_players p
+    left join player_accounts pa on pa.player_id = p.id
+    where p.season = ${SEASON}
+    order by p.updated_at desc
     limit 400
   `;
 
@@ -590,6 +593,7 @@ export async function getAdminDashboard(
       id: row.id,
       publicId: publicPlayerId(row.id),
       name: snap.name || "(без імені)",
+      accountUsername: snap.accountUsername,
       spins: snap.spins,
       xp: snap.xp,
       level: snap.level,
@@ -620,6 +624,7 @@ export async function getAdminDashboard(
     ? allSummaries.filter(
         (p) =>
           p.name.toLowerCase().includes(q) ||
+          (p.accountUsername ?? "").toLowerCase().includes(q) ||
           p.id.toLowerCase().includes(q) ||
           p.publicId.toLowerCase().includes(q) ||
           (p.ipHint ?? "").toLowerCase().includes(q) ||
@@ -670,9 +675,10 @@ export async function spectateAdminPlayer(sql: Sql, playerId: string): Promise<A
   if (!ID_RE.test(playerId)) throw new Error("Невірний ID гравця");
 
   const rows = await sql<DbPlayerRow>`
-    select *
-    from leaderboard_players
-    where id = ${playerId}
+    select p.*, pa.username as account_username
+    from leaderboard_players p
+    left join player_accounts pa on pa.player_id = p.id
+    where p.id = ${playerId}
     limit 1
   `;
   const row = rows[0];
@@ -725,6 +731,7 @@ export async function spectateAdminPlayer(sql: Sql, playerId: string): Promise<A
     id: row.id,
     publicId: publicPlayerId(row.id),
     name: snap.name || "(без імені)",
+    accountUsername: snap.accountUsername,
     season: snap.season,
     verified: Boolean(row.token_hash),
     online,
@@ -806,6 +813,7 @@ export async function demonetizeAdminPlayer(
       spin_event_kind = null,
       spin_event_left = 0,
       in_blackout = false,
+      last_spin_turbo = false,
       last_spin_at = null,
       last_aid_at = null,
       rook_ready_at = null,

@@ -60,8 +60,8 @@ export const SPIN_EVENT_CHANCE = 0.18;
 
 export const SPIN_DURATION_NORMAL_MS = 4600;
 export const SPIN_DURATION_TURBO_MS = 1300;
-export const SPIN_COOLDOWN_NORMAL_MS = 3600;
-export const SPIN_COOLDOWN_TURBO_MS = 1000;
+export const SPIN_COOLDOWN_NORMAL_MS = 3200;
+export const SPIN_COOLDOWN_TURBO_MS = 650;
 export const BLACKOUT_MIN_MS = 600;
 
 

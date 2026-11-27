@@ -77,6 +77,7 @@ export type GachaStore = GachaState & {
   setBadges: (on: boolean) => void;
   setLastBatch: (results: PullOutcome[]) => void;
   applyServerGacha: (snap: ServerGachaSync) => void;
+  resetGacha: () => void;
 };
 
 function initial(): GachaState {
@@ -136,6 +137,12 @@ export const useGacha = create<GachaStore>()(
           rookReadyAt: snap.rookReadyAt,
           seq: snap.seq,
         }),
+      resetGacha: () =>
+        set((s) => ({
+          ...initial(),
+          muted: s.muted,
+          badges: s.badges,
+        })),
     }),
     {
       name: "dtek-isekai-gacha-v1",

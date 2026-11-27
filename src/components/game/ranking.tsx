@@ -60,9 +60,16 @@ function NameForm() {
   );
 }
 
-export function Ranking({ ready }: { ready: boolean }) {
+export function Ranking({
+  ready,
+  onOpenAccount,
+}: {
+  ready: boolean;
+  onOpenAccount?: () => void;
+}) {
   const myId = usePlayer((s) => s.id);
   const myName = usePlayer((s) => s.name);
+  const accountUsername = usePlayer((s) => s.accountUsername);
   const myPublicId = ready ? getPublicPlayerId(myId) : "";
   const { data, error, isLoading } = useSWR(LEADERBOARD_KEY, () => getLeaderboard(), {
     refreshInterval: 4000,
@@ -95,6 +102,26 @@ export function Ranking({ ready }: { ready: boolean }) {
             <p className="mb-2 text-xs text-muted">Введіть нікнейм, щоб потрапити в таблицю.</p>
           )}
           <NameForm />
+          {onOpenAccount ? (
+            <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2.5 text-xs">
+              <span className="text-muted">
+                {accountUsername ? (
+                  <>
+                    Акаунт: <strong className="font-mono text-on">@{accountUsername}</strong>
+                  </>
+                ) : (
+                  "Акаунт ще не прив'язано до логіна і пароля"
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={onOpenAccount}
+                className="font-display rounded-lg border border-amber/40 bg-amber/10 px-2.5 py-1 text-[11px] text-amber hover:bg-amber/20"
+              >
+                {accountUsername ? "Керувати акаунтом" : "Створити / Увійти"}
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

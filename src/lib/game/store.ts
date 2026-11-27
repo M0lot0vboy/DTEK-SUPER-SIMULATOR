@@ -35,7 +35,8 @@ export type Store = GameState & {
   refundResin: () => void;
   completeSpin: (outcome: Outcome, battery: number, serverStats?: { spins: number; xp: number }) => void;
   applyServerGame: (stats: { spins: number; xp: number }) => void;
-  resetAllProgress: () => void;
+  resetAllProgress: (options?: { silentToast?: boolean }) => void;
+  resetForAccountSwitch: (stats: { spins: number; xp: number }) => void;
   applyBatteryDelta: (delta: number) => void;
   unlock: (id: string) => void;
   pull: (count: number) => PullResult[];
@@ -221,9 +222,21 @@ export const useGame = create<Store>()(
         set({ spins: stats.spins, xp: stats.xp });
       },
 
-      resetAllProgress: () => {
+      resetAllProgress: (options?: { silentToast?: boolean }) => {
         set({ ...initialState(), resinAt: 0 });
-        get().pushToast("Акаунт обнулено", "Адміністрація виконала AC Reset", "#d64545");
+        if (!options?.silentToast) {
+          get().pushToast("Акаунт обнулено", "Адміністрація виконала AC Reset", "#d64545");
+        }
+      },
+
+      resetForAccountSwitch: (stats: { spins: number; xp: number }) => {
+        set({
+          ...initialState(),
+          resinAt: 0,
+          spins: stats.spins,
+          xp: stats.xp,
+          kw: Math.max(300, stats.spins * 20),
+        });
       },
 
       applyBatteryDelta: (delta: number) => {

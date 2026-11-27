@@ -537,6 +537,11 @@ function AdminPage() {
                               title={p.online ? "Онлайн" : "Офлайн"}
                             />
                             <span className="truncate font-semibold text-fg">{p.name}</span>
+                            {p.accountUsername ? (
+                              <span className="rounded border border-on/30 bg-on/10 px-1.5 py-0.5 font-mono text-[11px] text-on">
+                                @{p.accountUsername}
+                              </span>
+                            ) : null}
                             <span className="rounded bg-bg px-1.5 py-0.5 font-mono text-[11px] text-muted">
                               #{p.publicId}
                             </span>
@@ -721,6 +726,11 @@ function AdminPage() {
                   </div>
                   <h2 className="font-display mt-1.5 truncate text-lg font-bold text-fg">
                     {spectateData?.name ?? "Завантаження…"}
+                    {spectateData?.accountUsername ? (
+                      <span className="ml-2 font-mono text-xs font-normal text-on">
+                        @{spectateData.accountUsername}
+                      </span>
+                    ) : null}
                   </h2>
                   <p className="break-all font-mono text-[11px] text-muted">
                     ID: {spectateId} {spectateData ? `(#${spectateData.publicId})` : ""}

@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { SEASON } from "@/lib/game/season";
 import type {
+  AccountAuthResult,
   ActiveBanInfo,
   BanType,
   LeaderRow,
@@ -12,6 +13,7 @@ import type {
 } from "@/lib/anticheat.server";
 
 export type {
+  AccountAuthResult,
   ActiveBanInfo,
   BanType,
   LeaderRow,
@@ -334,4 +336,62 @@ export const sacrificeRookServer = createServerFn({ method: "POST" })
       (sql, anticheat, telemetry) => anticheat.executeServerRook(sql, { ...data, telemetry }),
       data.telemetry,
     );
+  });
+
+export const registerAccount = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    const username = cleanName(d.username).replace(/\s+/g, "");
+    const password = String(d.password ?? "");
+    if (username.length < 3) throw new Error("Логін має бути від 3 символів");
+    if (password.length < 6) throw new Error("Пароль має містити щонайменше 6 символів");
+    if (password.length > 128) throw new Error("Пароль занадто довгий");
+    return {
+      ...auth,
+      username,
+      password,
+      name: typeof d.name === "string" ? cleanName(d.name) : undefined,
+      legacy: (d.legacy && typeof d.legacy === "object" ? d.legacy : undefined) as LegacySeedInput | undefined,
+      telemetry: cleanClientTelemetry(d.telemetry),
+    };
+  })
+  .handler(async ({ data }): Promise<AccountAuthResult> => {
+    return runWithBanCookie(
+      (sql, anticheat, telemetry) => anticheat.registerPlayerAccount(sql, { ...data, telemetry }),
+      data.telemetry,
+    );
+  });
+
+export const loginAccount = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const d = (data ?? {}) as Record<string, unknown>;
+    if (Number(d.season) !== SEASON) throw new Error("Сезон застарів — онови сторінку");
+    const username = cleanName(d.username).replace(/\s+/g, "");
+    const password = String(d.password ?? "");
+    if (username.length < 3) throw new Error("Введи логін (від 3 символів)");
+    if (!password) throw new Error("Введи пароль");
+    return {
+      season: SEASON,
+      username,
+      password: password.slice(0, 128),
+      telemetry: cleanClientTelemetry(d.telemetry),
+    };
+  })
+  .handler(async ({ data }): Promise<AccountAuthResult> => {
+    return runWithBanCookie(
+      (sql, anticheat, telemetry) => anticheat.loginPlayerAccount(sql, { ...data, telemetry }),
+      data.telemetry,
+    );
+  });
+
+export const logoutAccount = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => parseBaseAuth(data))
+  .handler(async ({ data }): Promise<{ ok: true }> => {
+    const [{ getSql }, anticheat] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
+    const sql = await getSql();
+    return anticheat.logoutPlayerAccount(sql, data);
   });

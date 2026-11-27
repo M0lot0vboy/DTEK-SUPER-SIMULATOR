@@ -13,11 +13,15 @@ import {
   exchangeShardsServer,
   getSeason,
   initSession,
+  loginAccount,
+  logoutAccount,
   pullBanner,
+  registerAccount,
   sacrificeRookServer,
   setPlayerName,
   spinWheel,
   toggleEquipServer,
+  type AccountAuthResult,
   type ActiveBanInfo,
   type BanType,
   type LegacySeedInput,
@@ -134,6 +138,7 @@ type PlayerStore = {
   secret: string;
   name: string;
   registered: boolean;
+  accountUsername: string | null;
   lastResetAt: number;
   setName: (name: string) => void;
 };
@@ -145,6 +150,7 @@ export const usePlayer = create<PlayerStore>()(
       secret: newSecret(),
       name: "",
       registered: false,
+      accountUsername: null,
       lastResetAt: 0,
       setName: (name) => set({ name }),
     }),
@@ -159,6 +165,7 @@ export const usePlayer = create<PlayerStore>()(
           secret: typeof p.secret === "string" && SECRET_RE.test(p.secret) ? p.secret : current.secret,
           name: typeof p.name === "string" ? p.name : current.name,
           registered: Boolean(p.registered),
+          accountUsername: typeof p.accountUsername === "string" && p.accountUsername ? p.accountUsername : null,
           lastResetAt: typeof p.lastResetAt === "number" && Number.isFinite(p.lastResetAt) ? p.lastResetAt : 0,
         };
       },
@@ -217,6 +224,7 @@ export function applyServerSnapshot(
   usePlayer.setState((prev) => ({
     registered: true,
     name: snap.name.length >= 2 ? snap.name : prev.name,
+    accountUsername: snap.accountUsername ?? null,
     lastResetAt: Math.max(prev.lastResetAt, snap.demonetizedAt),
   }));
 
@@ -497,4 +505,90 @@ export async function performSetName(name: string): Promise<PlayerSnapshot> {
   } catch (err) {
     return rethrowAfterBanCheck(err);
   }
+}
+
+export async function performRegisterAccount(username: string, password: string): Promise<AccountAuthResult> {
+  const creds = getCredentials();
+  const telemetry = await collectTelemetry();
+  try {
+    const res = await registerAccount({
+      data: {
+        season: creds.season,
+        id: creds.id,
+        secret: creds.secret,
+        username,
+        password,
+        name: creds.name || undefined,
+        legacy: collectLegacySeed(),
+        telemetry,
+      },
+    });
+    sessionSynced = true;
+    usePlayer.setState({
+      id: res.id,
+      secret: res.secret,
+      accountUsername: res.accountUsername,
+      registered: true,
+    });
+    applyServerSnapshot(res.state);
+    void mutate(LEADERBOARD_KEY);
+    return res;
+  } catch (err) {
+    return rethrowAfterBanCheck(err);
+  }
+}
+
+export async function performLoginAccount(username: string, password: string): Promise<AccountAuthResult> {
+  const telemetry = await collectTelemetry();
+  const prevId = usePlayer.getState().id;
+  try {
+    const res = await loginAccount({
+      data: {
+        season: SEASON,
+        username,
+        password,
+        telemetry,
+      },
+    });
+    sessionSynced = true;
+    if (res.id !== prevId) {
+      useGame.getState().resetForAccountSwitch({ spins: res.state.spins, xp: res.state.xp });
+    }
+    usePlayer.setState({
+      id: res.id,
+      secret: res.secret,
+      name: res.state.name,
+      registered: true,
+      accountUsername: res.accountUsername,
+      lastResetAt: res.state.demonetizedAt,
+    });
+    applyServerSnapshot(res.state);
+    void mutate(LEADERBOARD_KEY);
+    return res;
+  } catch (err) {
+    return rethrowAfterBanCheck(err);
+  }
+}
+
+export async function performLogoutAccount(): Promise<void> {
+  const creds = getCredentials();
+  try {
+    await logoutAccount({
+      data: { season: creds.season, id: creds.id, secret: creds.secret },
+    });
+  } catch {
+    // Clearing local session still logs this browser out safely even if offline.
+  }
+  sessionSynced = false;
+  usePlayer.setState({
+    id: newId(),
+    secret: newSecret(),
+    name: "",
+    registered: false,
+    accountUsername: null,
+    lastResetAt: 0,
+  });
+  useGacha.getState().resetGacha();
+  useGame.getState().resetAllProgress({ silentToast: true });
+  void mutate(LEADERBOARD_KEY);
 }
