@@ -1,20 +1,28 @@
+import { useState } from "react";
 import { SHARDS_PER_TICKET, useGacha } from "@/lib/gacha/engine";
 import { useGame } from "@/lib/game/store";
 import { sfxClick } from "@/lib/gacha/audio";
+import { performExchangeShards } from "@/lib/game/player";
 
 export function Shop() {
   const shards = useGacha((s) => s.shards);
+  const [exchanging, setExchanging] = useState(false);
 
-  function exchange() {
+  async function exchange() {
+    if (exchanging || shards < SHARDS_PER_TICKET) return;
     sfxClick();
-    const ok = useGacha.getState().exchangeShards();
-    useGame
-      .getState()
-      .pushToast(
-        ok ? "Обмін виконано" : "Мало копіуму",
-        ok ? "+1 талон на молитву. Копіум перетворено на надію." : `Треба ${SHARDS_PER_TICKET} уламків копіуму.`,
-        ok ? "#a879f0" : "#d64545",
-      );
+    setExchanging(true);
+    try {
+      await performExchangeShards();
+      useGame
+        .getState()
+        .pushToast("Обмін виконано", "+1 талон на молитву. Копіум перетворено на надію.", "#a879f0");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : `Треба ${SHARDS_PER_TICKET} уламків копіуму.`;
+      useGame.getState().pushToast("Мало копіуму", msg, "#d64545");
+    } finally {
+      setExchanging(false);
+    }
   }
 
   return (
@@ -28,8 +36,8 @@ export function Shop() {
         </div>
         <button
           type="button"
-          onClick={exchange}
-          disabled={shards < SHARDS_PER_TICKET}
+          onClick={() => void exchange()}
+          disabled={exchanging || shards < SHARDS_PER_TICKET}
           className="font-display min-h-10 shrink-0 rounded-full border border-[#a879f0]/60 px-4 text-xs font-bold text-[#a879f0] disabled:opacity-40"
         >
           обміняти

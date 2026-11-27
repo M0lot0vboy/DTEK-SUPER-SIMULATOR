@@ -13,6 +13,7 @@ import {
 import { RARITY_COLOR, unitById } from "@/lib/gacha/pool";
 import { setSynthMuted, sfxClick } from "@/lib/gacha/audio";
 import { useGame } from "@/lib/game/store";
+import { performClaimAid, performPull, performSacrificeRook } from "@/lib/game/player";
 import { PityBar } from "./pity-bar";
 import { PullCutscene } from "./pull-cutscene";
 import { Codex } from "./codex";
@@ -85,9 +86,10 @@ export function GachaPanel({ ready }: { ready: boolean }) {
   const aidAt = useGacha((s) => s.aidAt);
   const muted = useGacha((s) => s.muted);
   const badges = useGacha((s) => s.badges);
-  const fakeMoney = useGacha((s) => s.fakeMoney);
   const [view, setView] = useState<View>("banner");
   const [results, setResults] = useState<PullOutcome[] | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [claimingAid, setClaimingAid] = useState(false);
   const [now, setNow] = useState(0);
 
   useEffect(() => {
@@ -100,24 +102,50 @@ export function GachaPanel({ ready }: { ready: boolean }) {
     setSynthMuted(muted);
   }, [muted]);
 
-  function doPull(count: number) {
-    const res = useGacha.getState().pull(count);
-    if (!res) {
-      const need = count * PULL_COST;
-      useGame.getState().pushToast("Мало кВт-гемів", `Треба ${need}. Крути колесо, проси допомогу або обміняй копіум.`, "#d64545");
+  async function doPull(count: 1 | 10) {
+    if (pulling) return;
+    const st = useGacha.getState();
+    const ticketsUsed = Math.min(st.tickets, count);
+    const gemCost = (count - ticketsUsed) * PULL_COST;
+    if (st.gems < gemCost) {
+      useGame
+        .getState()
+        .pushToast(
+          "Мало кВт-гемів",
+          `Треба ${count * PULL_COST}. Крути колесо, проси допомогу або обміняй копіум.`,
+          "#d64545",
+        );
       setView("shop");
       return;
     }
-    setResults(res);
+
+    setPulling(true);
+    try {
+      const res = await performPull(count);
+      setResults(res.results);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Не вдалося виконати молитву";
+      useGame.getState().pushToast("Помилка молитви", msg, "#d64545");
+    } finally {
+      setPulling(false);
+    }
   }
 
   const aidReady = ready && now >= aidAt;
   const aidLeft = Math.max(0, aidAt - now);
 
-  function claimAid() {
+  async function claimAid() {
+    if (claimingAid || !aidReady) return;
     sfxClick();
-    if (useGacha.getState().claimAid()) {
+    setClaimingAid(true);
+    try {
+      await performClaimAid();
       useGame.getState().pushToast("Аварійна допомога", `+${AID_AMOUNT} кВт-гемів. Держава не причетна.`, "#7dd694");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Аварійна допомога ще недоступна";
+      useGame.getState().pushToast("Аварійна допомога", msg, "#d64545");
+    } finally {
+      setClaimingAid(false);
     }
   }
 
@@ -188,7 +216,7 @@ export function GachaPanel({ ready }: { ready: boolean }) {
             }`}
           >
             {label}
-            {badges && ready && ((id === "banner" && aidReady) || (id === "shop" && fakeMoney === 0)) ? (
+            {badges && ready && ((id === "banner" && aidReady) || (id === "shop" && shards >= 14)) ? (
               <span className="absolute -top-1 -right-0.5 size-3 animate-pulse rounded-full border-2 border-bg bg-off" aria-label="нове" />
             ) : null}
           </button>
@@ -203,8 +231,8 @@ export function GachaPanel({ ready }: { ready: boolean }) {
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => doPull(1)}
-                disabled={!ready}
+                onClick={() => void doPull(1)}
+                disabled={!ready || pulling}
                 className="font-display min-h-14 rounded-2xl border border-amber/50 bg-ink px-3 text-sm font-bold text-amber transition-transform active:scale-95 disabled:opacity-50"
               >
                 Молитва ×1
@@ -212,8 +240,8 @@ export function GachaPanel({ ready }: { ready: boolean }) {
               </button>
               <button
                 type="button"
-                onClick={() => doPull(10)}
-                disabled={!ready}
+                onClick={() => void doPull(10)}
+                disabled={!ready || pulling}
                 className="font-display min-h-14 rounded-2xl bg-amber px-3 text-sm font-extrabold text-ink transition-transform active:scale-95 disabled:opacity-50"
               >
                 Молитва ×10
@@ -224,8 +252,8 @@ export function GachaPanel({ ready }: { ready: boolean }) {
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={claimAid}
-                disabled={!aidReady}
+                onClick={() => void claimAid()}
+                disabled={!aidReady || claimingAid}
                 className="font-display relative flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-full border border-[#7dd694]/50 bg-surface px-4 text-xs font-bold text-[#7dd694] disabled:opacity-50"
               >
                 <Siren className="size-4" aria-hidden />
@@ -246,7 +274,7 @@ export function GachaPanel({ ready }: { ready: boolean }) {
             <details className="rounded-xl border border-line bg-surface p-3 text-[11px] text-muted">
               <summary className="font-display cursor-pointer text-xs text-fg">Шанси та правила</summary>
               <ul className="mt-2 space-y-1">
-                <li>5★ базовий шанс 0,6% · м&apos;який гарант з 74-ї молитви · жорсткий гарант на 90-й.</li>
+                <li>5★ базовий шанс 0,9% · м&apos;який гарант з 70-ї молитви · жорсткий гарант на 90-й.</li>
                 <li>4★ базовий шанс 5,1% · 4★ або краще кожні 10 молитов.</li>
                 <li>50/50: перемога — рекомендований 5★. Поразка — АВАРІЙНЕ ВІДКЛЮЧЕННЯ і гарант наступного разу.</li>
                 <li>Дублікати дають копіум і підвищують сузір&apos;я до C6.</li>
@@ -263,8 +291,9 @@ export function GachaPanel({ ready }: { ready: boolean }) {
         <PullCutscene
           key={results.map((r) => r.unitId).join(",") + totalPulls}
           results={results}
+          pulling={pulling}
           onClose={() => setResults(null)}
-          onAgain={() => doPull(results.length)}
+          onAgain={() => void doPull(results.length === 10 ? 10 : 1)}
           onFlex={() => void copyFlex()}
         />
       ) : null}
@@ -288,15 +317,25 @@ function Loadout({ ready, now }: { ready: boolean; now: number }) {
   const copies = useGacha((s) => s.copies);
   const rookReadyAt = useGacha((s) => s.rookReadyAt);
   const boostSpins = useGacha((s) => s.boostSpins);
+  const [sacrificing, setSacrificing] = useState(false);
   const buffs = computeBuffs(loadout, copies);
   const slots = Array.from({ length: MAX_LOADOUT }, (_, i) => (ready ? loadout[i] : undefined));
   const rookReady = ready && buffs.rook && now >= rookReadyAt;
 
-  function sacrifice() {
-    if (useGacha.getState().sacrificeRook()) {
+  async function sacrifice() {
+    if (sacrificing || !rookReady) return;
+    setSacrificing(true);
+    try {
+      await performSacrificeRook();
+      useGame.setState({ battery: 100 });
       useGame
         .getState()
         .pushToast("ТУРУ ПОЖЕРТВУВАНО!!", "Підстанцію примусово перезапущено. Павербанк 100%, ×3 кВт-геми на 5 круток.", "#e8a317");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Тура ще відновлюється";
+      useGame.getState().pushToast("ТУРА", msg, "#d64545");
+    } finally {
+      setSacrificing(false);
     }
   }
 
@@ -341,8 +380,8 @@ function Loadout({ ready, now }: { ready: boolean; now: number }) {
       {ready && buffs.rook ? (
         <button
           type="button"
-          onClick={sacrifice}
-          disabled={!rookReady}
+          onClick={() => void sacrifice()}
+          disabled={!rookReady || sacrificing}
           className="font-display mt-3 min-h-12 w-full rounded-full bg-[linear-gradient(90deg,#e8a317,#ffe066,#e8a317)] text-sm font-extrabold text-ink disabled:opacity-40"
         >
           {rookReady ? "♜ ПОЖЕРТВУВАТИ ТУРУ" : `тура відновлюється · ${fmt(rookReadyAt - now)}`}

@@ -24,6 +24,47 @@ export const XP_PER_OUTCOME: Record<Outcome, number> = {
   respin: 12,
 };
 
+export type WheelSlice = { id: Outcome; lines: string[]; fill: string; ink: string; small?: boolean };
+
+export const WHEEL_SLICES: WheelSlice[] = [
+  { id: "off", lines: ["ВИМК"], fill: "#d64545", ink: "#f4efe6" },
+  { id: "on", lines: ["Є"], fill: "#e8a317", ink: "#1a1612" },
+  { id: "off", lines: ["ВИМК"], fill: "#d64545", ink: "#f4efe6" },
+  { id: "on", lines: ["Є"], fill: "#e8a317", ink: "#1a1612" },
+  { id: "blink", lines: ["3 ХВ", "СВІТЛА"], fill: "#5ec4b3", ink: "#0e211d", small: true },
+  { id: "off", lines: ["ВИМК"], fill: "#d64545", ink: "#f4efe6" },
+  { id: "blackout", lines: ["БЛА", "КАУТ"], fill: "#7c1f3c", ink: "#ffd9dd", small: true },
+  { id: "on", lines: ["Є"], fill: "#e8a317", ink: "#1a1612" },
+  { id: "generator", lines: ["ГЕНЕ", "РАТОР"], fill: "#4fae63", ink: "#0d1f12", small: true },
+  { id: "off", lines: ["ВИМК"], fill: "#d64545", ink: "#f4efe6" },
+  { id: "respin", lines: ["ГРАФІК", "ЗНИК"], fill: "#8d7bd8", ink: "#14101f", small: true },
+  { id: "on", lines: ["Є"], fill: "#e8a317", ink: "#1a1612" },
+];
+
+export const GOLDEN_SLICE_INDICES = WHEEL_SLICES.map((s, i) =>
+  s.id === "on" || s.id === "generator" ? i : -1,
+).filter((i) => i >= 0);
+
+export type SpinEventKind = "turbo" | "double" | "shield" | "golden";
+export type ActiveSpinEvent = { kind: SpinEventKind; left: number };
+
+export const SPIN_EVENTS: Record<SpinEventKind, { title: string; desc: string; color: string; spins: number }> = {
+  turbo: { title: "ТУРБО-ОБЕРТ", desc: "Диспетчер випив енергетик. Колесо крутиться втричі швидше.", color: "#5ec4b3", spins: 5 },
+  double: { title: "ПОДВІЙНІ кВт", desc: "Лічильник зламався на твою користь. Енергія ×2.", color: "#e8a317", spins: 4 },
+  shield: { title: "ЩИТ ПАВЕРБАНКА", desc: "Сусід поділився зарядкою. Батарея не сідає.", color: "#7dd694", spins: 3 },
+  golden: { title: "ЗОЛОТА ГОДИНА", desc: "ДТЕК забув про твою вулицю. Тільки світло і генератори.", color: "#ffd36b", spins: 2 },
+};
+
+export const SPIN_EVENT_KINDS = Object.keys(SPIN_EVENTS) as SpinEventKind[];
+export const SPIN_EVENT_CHANCE = 0.18;
+
+export const SPIN_DURATION_NORMAL_MS = 4600;
+export const SPIN_DURATION_TURBO_MS = 1300;
+export const SPIN_COOLDOWN_NORMAL_MS = 3600;
+export const SPIN_COOLDOWN_TURBO_MS = 1000;
+export const BLACKOUT_MIN_MS = 600;
+
+
 export const TITLES = [
   "Новосел",
   "Свічкар-стажер",

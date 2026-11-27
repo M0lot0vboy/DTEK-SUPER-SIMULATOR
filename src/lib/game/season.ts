@@ -16,7 +16,7 @@ export function ensureSeasonReset(): void {
     }
     for (const key of doomed) window.localStorage.removeItem(key);
     window.localStorage.setItem(SEASON_KEY, String(SEASON));
-    window.localStorage.setItem("dtek-reset-reload", "1");
+    if (doomed.length > 0) window.localStorage.setItem("dtek-reset-reload", "1");
   } catch {
     // Storage unavailable (private mode etc.) — nothing persisted to wipe.
   }

@@ -1,8 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { mutate } from "swr";
 import { Zap, ZapOff, Plug, Sparkles } from "lucide-react";
 import {
+  SPIN_DURATION_NORMAL_MS,
+  SPIN_DURATION_TURBO_MS,
+  SPIN_EVENTS,
+  WHEEL_SLICES,
   todayKey,
+  type ActiveSpinEvent,
   type Outcome,
 } from "@/lib/game/data";
 import { useGame, batteryDrain, eventChance, migrateLegacy } from "@/lib/game/store";
@@ -14,27 +20,17 @@ import { Ranking } from "@/components/game/ranking";
 import { Toasts } from "@/components/game/toasts";
 import { DailyModal } from "@/components/game/daily-modal";
 import { GachaPanel } from "@/components/gacha/gacha-panel";
-import { afterSpinGacha, loadoutBuffs, useGacha } from "@/lib/gacha/engine";
-import { useLeaderboardSync, useSeasonGuard } from "@/lib/game/player";
+import { loadoutBuffs, useGacha } from "@/lib/gacha/engine";
+import {
+  LEADERBOARD_KEY,
+  applyServerSnapshot,
+  performClearBlackout,
+  performSpin,
+  useSeasonGuard,
+  useSessionSync,
+} from "@/lib/game/player";
 
 export const Route = createFileRoute("/")({ component: Home });
-
-type Slice = { id: Outcome; lines: string[]; fill: string; ink: string; small?: boolean };
-
-const SLICES: Slice[] = [
-  { id: "off", lines: ["ВИМК"], fill: "#d64545", ink: "#f4efe6" },
-  { id: "on", lines: ["Є"], fill: "#e8a317", ink: "#1a1612" },
-  { id: "off", lines: ["ВИМК"], fill: "#d64545", ink: "#f4efe6" },
-  { id: "on", lines: ["Є"], fill: "#e8a317", ink: "#1a1612" },
-  { id: "blink", lines: ["3 ХВ", "СВІТЛА"], fill: "#5ec4b3", ink: "#0e211d", small: true },
-  { id: "off", lines: ["ВИМК"], fill: "#d64545", ink: "#f4efe6" },
-  { id: "blackout", lines: ["БЛА", "КАУТ"], fill: "#7c1f3c", ink: "#ffd9dd", small: true },
-  { id: "on", lines: ["Є"], fill: "#e8a317", ink: "#1a1612" },
-  { id: "generator", lines: ["ГЕНЕ", "РАТОР"], fill: "#4fae63", ink: "#0d1f12", small: true },
-  { id: "off", lines: ["ВИМК"], fill: "#d64545", ink: "#f4efe6" },
-  { id: "respin", lines: ["ГРАФІК", "ЗНИК"], fill: "#8d7bd8", ink: "#14101f", small: true },
-  { id: "on", lines: ["Є"], fill: "#e8a317", ink: "#1a1612" },
-];
 
 const OFF_NOTES = [
   "Планові роботи. Свічки вже в моді, чайник — ні.",
@@ -115,18 +111,6 @@ const EVENTS = [
   { title: "ЗУСТРІЧ ВІДМІНЕНА", text: "Zoom падає у всій країні однаково. Відмова зустрічі — патріотична.", delta: 0 },
 ];
 
-type SpinEventKind = "turbo" | "double" | "shield" | "golden";
-type ActiveSpinEvent = { kind: SpinEventKind; left: number };
-
-const SPIN_EVENTS: Record<SpinEventKind, { title: string; desc: string; color: string; spins: number }> = {
-  turbo: { title: "ТУРБО-ОБЕРТ", desc: "Диспетчер випив енергетик. Колесо крутиться втричі швидше.", color: "#5ec4b3", spins: 5 },
-  double: { title: "ПОДВІЙНІ кВт", desc: "Лічильник зламався на твою користь. Енергія ×2.", color: "#e8a317", spins: 4 },
-  shield: { title: "ЩИТ ПАВЕРБАНКА", desc: "Сусід поділився зарядкою. Батарея не сідає.", color: "#7dd694", spins: 3 },
-  golden: { title: "ЗОЛОТА ГОДИНА", desc: "ДТЕК забув про твою вулицю. Тільки світло і генератори.", color: "#ffd36b", spins: 2 },
-};
-const SPIN_EVENT_KINDS = Object.keys(SPIN_EVENTS) as SpinEventKind[];
-const SPIN_EVENT_CHANCE = 0.18;
-
 const OFF_BONUS = ["свічка +1", "плед уже гріється", "ліхтарик на 12%", "сусід кричить «знову»"];
 const ON_BONUS = ["чайник дозволено", "вайфай ще дихає", "серіал не обірветься", "зарядка святкує"];
 
@@ -147,10 +131,14 @@ type Tab = "isekai" | "gacha" | "quests" | "ranking";
 function Home() {
   const [rotation, setRotation] = useState(0);
   const [spinning, setSpinning] = useState(false);
+  const [spinPending, setSpinPending] = useState(false);
   const [result, setResult] = useState<Outcome | null>(null);
   const [ready, setReady] = useState(false);
   const [showDaily, setShowDaily] = useState(false);
-  useLeaderboardSync(ready);
+  useSessionSync(ready, (snap) => {
+    if (snap.inBlackout) setBlackout(true);
+    if (snap.spinEvent) setSpinEvent(snap.spinEvent);
+  });
   useSeasonGuard();
   const [note, setNote] = useState("");
   const [bonus, setBonus] = useState("");
@@ -158,13 +146,14 @@ function Home() {
   const [countdown, setCountdown] = useState<number | null>(null);
   const [blackout, setBlackout] = useState(false);
   const [candleClicks, setCandleClicks] = useState(0);
+  const [relighting, setRelighting] = useState(false);
   const [doom, setDoom] = useState(false);
   const [doomClicks, setDoomClicks] = useState(0);
   const [confetti, setConfetti] = useState(false);
   const [event, setEvent] = useState<(typeof EVENTS)[number] | null>(null);
   const [tab, setTab] = useState<Tab>("gacha");
   const [spinEvent, setSpinEvent] = useState<ActiveSpinEvent | null>(null);
-  const [spinMs, setSpinMs] = useState(4600);
+  const [spinMs, setSpinMs] = useState(SPIN_DURATION_NORMAL_MS);
   const timer = useRef<number | null>(null);
 
   const pet = useGame((s) => s.pet);
@@ -180,7 +169,10 @@ function Home() {
     const iv = window.setInterval(() => useGame.getState().regenResin(), 1000);
     if (useGame.getState().daily.date !== todayKey()) setShowDaily(true);
     setReady(true);
-    return () => window.clearInterval(iv);
+    return () => {
+      window.clearInterval(iv);
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -190,42 +182,58 @@ function Home() {
   const wheelPath = useMemo(() => buildWheel(), []);
   const prophecy = useMemo(() => dailyPick(PROPHECIES), []);
 
-  function spin() {
-    if (spinning || blackout || doom || !ready) return;
-    const g = useGame.getState();
-
-    const active = spinEvent;
-    const goldenSlices = SLICES.map((s, i) => (s.id === "on" || s.id === "generator" ? i : -1)).filter((i) => i >= 0);
-    const index =
-      active?.kind === "golden" ? pick(goldenSlices) : Math.floor(Math.random() * SLICES.length);
-    const outcome = SLICES[index].id;
-    const turbo = active?.kind === "turbo";
-    const turns = (turbo ? 3 : 5) + Math.floor(Math.random() * 3);
-    const jitter = (Math.random() - 0.5) * (30 * 0.5);
-    const currentMod = ((rotation % 360) + 360) % 360;
-    const desiredMod = (((360 - (index * 30 + 15) + jitter) % 360) + 360) % 360;
-    let delta = desiredMod - currentMod;
-    if (delta < 0) delta += 360;
-    const next = rotation + turns * 360 + delta;
-
-    setSpinning(true);
+  async function spin() {
+    if (spinning || spinPending || blackout || doom || !ready) return;
+    setSpinPending(true);
     setResult(null);
     setFlash(null);
     setCountdown(null);
     setEvent(null);
-    setRotation(next);
 
-    const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 80 : turbo ? 1300 : 4600;
-    setSpinMs(duration);
+    let res;
+    try {
+      res = await performSpin();
+    } catch (err) {
+      setSpinPending(false);
+      const msg = err instanceof Error ? err.message : "Не вдалося виконати крутку";
+      useGame.getState().pushToast("Захист ДТЕК", msg, "#d64545");
+      return;
+    }
+
+    const g = useGame.getState();
+    const index = res.sliceIndex;
+    const outcome = res.outcome;
+    const turbo = res.turbo;
+    const active = res.activeEventBefore;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const duration = turbo ? SPIN_DURATION_TURBO_MS : SPIN_DURATION_NORMAL_MS;
+
+    if (!reduced) {
+      const turns = (turbo ? 3 : 5) + Math.floor(Math.random() * 3);
+      const jitter = (Math.random() - 0.5) * (30 * 0.5);
+      const currentMod = ((rotation % 360) + 360) % 360;
+      const desiredMod = (((360 - (index * 30 + 15) + jitter) % 360) + 360) % 360;
+      let delta = desiredMod - currentMod;
+      if (delta < 0) delta += 360;
+      const next = rotation + turns * 360 + delta;
+      setRotation(next);
+    }
+
+    setSpinPending(false);
+    setSpinning(true);
+    setSpinMs(reduced ? 0 : duration);
+
     let clicks = 0;
-    const clickTimer = window.setInterval(() => {
-      clicks += 1;
-      tick(180 + (clicks % 4) * 40, 0.03);
-      if (clicks > 18) window.clearInterval(clickTimer);
-    }, turbo ? 70 : 180);
+    const clickTimer = reduced
+      ? null
+      : window.setInterval(() => {
+          clicks += 1;
+          tick(180 + (clicks % 4) * 40, 0.03);
+          if (clicks > 18) window.clearInterval(clickTimer!);
+        }, turbo ? 70 : 180);
 
     timer.current = window.setTimeout(() => {
-      window.clearInterval(clickTimer);
+      if (clickTimer !== null) window.clearInterval(clickTimer);
       setSpinning(false);
       setResult(outcome);
       setFlash(outcome);
@@ -233,31 +241,44 @@ function Home() {
 
       const drainBase = outcome === "off" ? -15 : outcome === "blackout" ? -30 : outcome === "on" ? 8 : outcome === "generator" ? 45 : outcome === "blink" ? 3 : 0;
       const shielded = active?.kind === "shield";
+      const buffs = loadoutBuffs();
       const drain =
         drainBase < 0
           ? shielded
             ? 0
-            : Math.round(batteryDrain(drainBase, pet) * loadoutBuffs().drain)
+            : Math.round(batteryDrain(drainBase, pet) * buffs.drain)
           : drainBase;
       const batteryNext = Math.min(100, Math.max(0, g.battery + drain));
       const kwBefore = useGame.getState().kw;
-      useGame.getState().completeSpin(outcome, batteryNext);
+      useGame.getState().completeSpin(outcome, batteryNext, { spins: res.state.spins, xp: res.state.xp });
       if (active?.kind === "double") {
         const gained = useGame.getState().kw - kwBefore;
         if (gained > 0) useGame.setState((s) => ({ kw: s.kw + gained }));
       }
 
-      if (active) {
-        setSpinEvent(active.left > 1 ? { kind: active.kind, left: active.left - 1 } : null);
-      } else if (outcome !== "respin" && outcome !== "blackout" && Math.random() < SPIN_EVENT_CHANCE) {
-        const kind = pick(SPIN_EVENT_KINDS);
-        const def = SPIN_EVENTS[kind];
-        setSpinEvent({ kind, left: def.spins });
+      setSpinEvent(res.nextSpinEvent);
+      if (!active && res.nextSpinEvent) {
+        const def = SPIN_EVENTS[res.nextSpinEvent.kind];
         chord();
         useGame.getState().pushToast(def.title, `${def.desc} (${def.spins} обертів)`, def.color);
       }
-      afterSpinGacha(outcome);
-      if (batteryNext >= 100 && g.battery < 100) useGame.getState().unlock("full");
+
+      applyServerSnapshot(res.state, { onlyIfNotBehind: true });
+      void mutate(LEADERBOARD_KEY);
+
+      if ((outcome === "on" || outcome === "blink") && buffs.onBonus > 0) {
+        useGame.getState().applyBatteryDelta(buffs.onBonus);
+      }
+      if (res.refunded) {
+        useGame.getState().pushToast("Загін подвоїв видобуток", `+${res.gemsGained} кВт-гемів`, "#a879f0");
+      }
+      if (res.queueProc) {
+        useGame.getState().applyBatteryDelta(20);
+        useGame.getState().pushToast("98%… КРАШ", "Атемпт 147 204. Queue 4.2 вибила напругу: павербанк +20%", "#5ec4b3");
+      }
+
+      const finalBattery = useGame.getState().battery;
+      if (finalBattery >= 100 && g.battery < 100) useGame.getState().unlock("full");
 
       const st = useGame.getState();
       if (st.last[0] === "on" && st.last[1] === "on" && st.last[2] === "on") st.unlock("optimist");
@@ -312,11 +333,11 @@ function Home() {
   }
 
   useEffect(() => {
-    if (result !== "respin" || spinning) return;
-    const t = window.setTimeout(() => spin(), 1800);
+    if (result !== "respin" || spinning || spinPending) return;
+    const t = window.setTimeout(() => void spin(), 1800);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result, spinning]);
+  }, [result, spinning, spinPending]);
 
   useEffect(() => {
     if (result !== "blink" || spinning || countdown === null) return;
@@ -334,17 +355,28 @@ function Home() {
     return () => window.clearTimeout(t);
   }, [result, spinning, countdown]);
 
-  function relight() {
+  async function relight() {
+    if (relighting) return;
     const clicks = candleClicks + 1;
     setCandleClicks(clicks);
     tick(200 + clicks * 60, 0.05);
     if (clicks >= 8) {
-      setBlackout(false);
-      useGame.getState().unlock("candle");
-      setNote("Свічка запалена. Темрява відступила (тимчасово).");
-      setBonus("+1 до морального духу");
-      setFlash("on");
-      window.setTimeout(() => setFlash(null), 700);
+      setRelighting(true);
+      try {
+        await performClearBlackout();
+        setBlackout(false);
+        setCandleClicks(0);
+        useGame.getState().unlock("candle");
+        setNote("Свічка запалена. Темрява відступила (тимчасово).");
+        setBonus("+1 до морального духу");
+        setFlash("on");
+        window.setTimeout(() => setFlash(null), 700);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Зачекай секунду!";
+        useGame.getState().pushToast("Блакаут", msg, "#d64545");
+      } finally {
+        setRelighting(false);
+      }
     }
   }
 
@@ -375,8 +407,9 @@ function Home() {
           <p className="mt-3 max-w-sm text-sm text-muted">{pick(BLACKOUT_NOTES)}</p>
           <button
             type="button"
-            onClick={relight}
-            className="mt-8 flex size-40 items-center justify-center rounded-full border border-amber/30 bg-surface/60 transition-transform active:scale-95"
+            onClick={() => void relight()}
+            disabled={relighting}
+            className="mt-8 flex size-40 items-center justify-center rounded-full border border-amber/30 bg-surface/60 transition-transform active:scale-95 disabled:opacity-60"
             aria-label="запалити свічку"
           >
             <span className="text-6xl" style={{ filter: `drop-shadow(0 0 ${candleClicks * 6}px #e8a317)` }}>
@@ -482,7 +515,10 @@ function Home() {
             className={`absolute inset-3 rounded-full border border-line bg-ink shadow-[0_20px_60px_rgba(0,0,0,0.45)] ${dark ? "animate-flicker opacity-30" : ""}`}
             style={{
               transform: `rotate(${rotation}deg)`,
-              transition: spinning ? `transform ${spinMs}ms cubic-bezier(0.12, 0.72, 0.08, 1)` : "none",
+              transition:
+                spinning && spinMs > 0
+                  ? `transform ${spinMs}ms cubic-bezier(0.12, 0.72, 0.08, 1)`
+                  : "none",
             }}
           >
             <svg viewBox="0 0 100 100" className="h-full w-full">
@@ -497,15 +533,15 @@ function Home() {
 
         <button
           type="button"
-          onClick={spin}
-          disabled={spinning || blackout || doom || !ready}
+          onClick={() => void spin()}
+          disabled={spinning || spinPending || blackout || doom || !ready}
           className="font-display relative z-10 mt-8 min-h-14 w-full max-w-xs rounded-full bg-amber px-8 text-base font-extrabold tracking-wide text-ink transition-transform enabled:hover:scale-[1.02] enabled:active:scale-[0.98] disabled:opacity-60"
         >
-          {spinning ? "рахуємо графік…" : result ? "ще раз" : "крутити"}
+          {spinning || spinPending ? "рахуємо графік…" : result ? "ще раз" : "крутити"}
         </button>
 
         <div className="mt-6 min-h-32 w-full max-w-md text-center" aria-live="polite">
-          {!ready || (!result && !spinning) ? (
+          {!ready || (!result && !spinning && !spinPending) ? (
             <div className="rounded-2xl border border-amber/30 bg-surface px-5 py-4">
               <p className="font-display flex items-center justify-center gap-2 text-sm text-amber">
                 <Sparkles className="size-4" aria-hidden /> прогноз дня
@@ -513,14 +549,14 @@ function Home() {
               <p className="mt-2 text-sm text-muted">{prophecy}</p>
             </div>
           ) : null}
-          {spinning ? <p className="font-display text-lg text-amber">колесо думає…</p> : null}
-          {result === "off" && !spinning ? (
+          {spinning || spinPending ? <p className="font-display text-lg text-amber">колесо думає…</p> : null}
+          {result === "off" && !spinning && !spinPending ? (
             <ResultCard tone="off" icon={<ZapOff className="size-6" aria-hidden />} title="ВИМКНУЛИ" note={note} bonus={bonus} />
           ) : null}
-          {result === "on" && !spinning ? (
+          {result === "on" && !spinning && !spinPending ? (
             <ResultCard tone="on" icon={<Zap className="size-6" aria-hidden />} title="НЕ ВИМКНУЛИ" note={note} bonus={bonus} />
           ) : null}
-          {result === "blink" && !spinning ? (
+          {result === "blink" && !spinning && !spinPending ? (
             <div className="rounded-2xl border border-[#5ec4b3]/40 bg-surface px-5 py-4">
               <p className="font-display flex items-center justify-center gap-2 text-2xl text-[#5ec4b3]">
                 <Zap className="size-6" aria-hidden /> СВІТЛО ЩЕ Є: {countdown} с
@@ -529,14 +565,14 @@ function Home() {
               <p className="font-display mt-3 text-xs tracking-widest text-[#5ec4b3] uppercase">{bonus}</p>
             </div>
           ) : null}
-          {result === "blackout" && !spinning ? (
+          {result === "blackout" && !spinning && !spinPending ? (
             <div className="rounded-2xl border border-[#7c1f3c]/60 bg-surface px-5 py-4">
               <p className="font-display flex items-center justify-center gap-2 text-2xl text-[#e06a8c]">🕯️ БЛАКАУТ</p>
               <p className="mt-2 text-sm text-muted">{note}</p>
               <p className="font-display mt-3 text-xs tracking-widest text-[#e06a8c] uppercase">{bonus}</p>
             </div>
           ) : null}
-          {result === "generator" && !spinning ? (
+          {result === "generator" && !spinning && !spinPending ? (
             <div className="rounded-2xl border border-[#4fae63]/40 bg-surface px-5 py-4">
               <p className="font-display flex items-center justify-center gap-2 text-2xl text-[#7dd694]">
                 <Plug className="size-6" aria-hidden /> ГЕНЕРАТОР!
@@ -545,14 +581,14 @@ function Home() {
               <p className="font-display mt-3 text-xs tracking-widest text-[#7dd694] uppercase">{bonus}</p>
             </div>
           ) : null}
-          {result === "respin" && !spinning ? (
+          {result === "respin" && !spinning && !spinPending ? (
             <div className="rounded-2xl border border-[#8d7bd8]/40 bg-surface px-5 py-4">
               <p className="font-display flex items-center justify-center gap-2 text-2xl text-[#a99cee]">🌀 ГРАФІК ЗНИК</p>
               <p className="mt-2 text-sm text-muted">{note}</p>
               <p className="font-display mt-3 text-xs tracking-widest text-[#a99cee] uppercase">{bonus}</p>
             </div>
           ) : null}
-          {event && !spinning ? (
+          {event && !spinning && !spinPending ? (
             <div className="animate-toast mt-3 rounded-2xl border border-line bg-ink px-5 py-4 text-left">
               <p className="font-display flex items-center justify-between gap-2 text-xs tracking-widest text-amber uppercase">
                 <span className="flex items-center gap-2">
@@ -690,7 +726,7 @@ function Confetti() {
 }
 
 function buildWheel() {
-  return SLICES.map((slice, i) => {
+  return WHEEL_SLICES.map((slice, i) => {
     const start = (i * 30 - 90) * (Math.PI / 180);
     const end = ((i + 1) * 30 - 90) * (Math.PI / 180);
     const x1 = 50 + 46 * Math.cos(start);

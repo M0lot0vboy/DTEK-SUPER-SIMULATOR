@@ -1,112 +1,223 @@
 import { createServerFn } from "@tanstack/react-start";
 import { SEASON } from "@/lib/game/season";
+import type {
+  LeaderRow,
+  LegacySeedInput,
+  PlayerSnapshot,
+  PullServerResult,
+  SpinExecutionResult,
+} from "@/lib/anticheat.server";
+
+export type { LeaderRow, LegacySeedInput, PlayerSnapshot, PullServerResult, SpinExecutionResult };
+
+export function cleanName(value: unknown): string {
+  let stripped = "";
+  for (const ch of String(value ?? "")) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (
+      code <= 0x1f ||
+      (code >= 0x7f && code <= 0x9f) ||
+      (code >= 0x200b && code <= 0x200f) ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2060 && code <= 0x206f) ||
+      code === 0xfeff
+    ) {
+      continue;
+    }
+    stripped += ch;
+  }
+  return stripped.replace(/\s+/g, " ").trim().slice(0, 20);
+}
+
+const ID_RE = /^[a-zA-Z0-9-]{8,64}$/;
+const SECRET_RE = /^[a-f0-9]{64}$/i;
+
+type BaseAuthPayload = {
+  season: number;
+  id: string;
+  secret: string;
+};
+
+function parseBaseAuth(data: unknown): BaseAuthPayload {
+  const d = (data ?? {}) as Record<string, unknown>;
+  if (Number(d.season) !== SEASON) throw new Error("Сезон застарів — онови сторінку");
+  const id = String(d.id ?? "");
+  if (!ID_RE.test(id)) throw new Error("Недійсний ідентифікатор гравця");
+  const secret = String(d.secret ?? "");
+  if (!SECRET_RE.test(secret)) throw new Error("Недійсний токен сесії");
+  return { season: SEASON, id, secret };
+}
+
+function cleanSeq(v: unknown): number {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
 
 export const getSeason = createServerFn({ method: "GET" }).handler(async () => SEASON);
 
-export type LeaderRow = {
-  id: string;
-  name: string;
-  spins: number;
-  level: number;
-  fives: number;
-  pulls: number;
-  updatedAt: string;
-};
+export const getLeaderboard = createServerFn({ method: "GET" }).handler(async (): Promise<LeaderRow[]> => {
+  const [{ getSql }, { fetchLeaderboard }] = await Promise.all([
+    import("@/lib/db"),
+    import("@/lib/anticheat.server"),
+  ]);
+  const sql = await getSql();
+  return fetchLeaderboard(sql);
+});
 
-export type ScoreInput = {
-  id: string;
-  name: string;
-  spins: number;
-  level: number;
-  fives: number;
-  pulls: number;
-};
-
-const ID_RE = /^[a-zA-Z0-9-]{8,64}$/;
-const MAX_STAT = 10_000_000;
-
-function cleanInt(value: unknown, max = MAX_STAT): number {
-  const n = Math.floor(Number(value));
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.min(n, max);
-}
-
-export function cleanName(value: unknown): string {
-  return String(value ?? "")
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 20);
-}
-
-function validateScore(data: unknown): ScoreInput {
-  const d = (data ?? {}) as Record<string, unknown>;
-  if (Number(d.season) !== SEASON) throw new Error("Outdated season — reload the game");
-  const id = String(d.id ?? "");
-  if (!ID_RE.test(id)) throw new Error("Invalid player id");
-  const name = cleanName(d.name);
-  if (name.length < 2) throw new Error("Name must be at least 2 characters");
-  return {
-    id,
-    name,
-    spins: cleanInt(d.spins),
-    level: Math.max(1, cleanInt(d.level, 100)),
-    fives: cleanInt(d.fives, 100_000),
-    pulls: cleanInt(d.pulls),
-  };
-}
-
-export const submitScore = createServerFn({ method: "POST" })
-  .inputValidator(validateScore)
-  .handler(async ({ data }) => {
-    const { getSql } = await import("@/lib/db");
+export const initSession = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return {
+      ...auth,
+      name: typeof d.name === "string" ? cleanName(d.name) : undefined,
+      legacy: (d.legacy && typeof d.legacy === "object" ? d.legacy : undefined) as LegacySeedInput | undefined,
+    };
+  })
+  .handler(async ({ data }): Promise<PlayerSnapshot> => {
+    const [{ getSql }, { initPlayerSession }] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
     const sql = await getSql();
-    // Within a season stats only move up, so a stale tab can't wipe a newer score.
-    // A row from an older season is overwritten outright.
-    await sql`
-      insert into leaderboard_players (id, name, spins, level, fives, pulls, season, updated_at)
-      values (${data.id}, ${data.name}, ${data.spins}, ${data.level}, ${data.fives}, ${data.pulls}, ${SEASON}, now())
-      on conflict (id) do update set
-        name = excluded.name,
-        spins = case when leaderboard_players.season = excluded.season
-          then greatest(leaderboard_players.spins, excluded.spins) else excluded.spins end,
-        level = case when leaderboard_players.season = excluded.season
-          then greatest(leaderboard_players.level, excluded.level) else excluded.level end,
-        fives = case when leaderboard_players.season = excluded.season
-          then greatest(leaderboard_players.fives, excluded.fives) else excluded.fives end,
-        pulls = case when leaderboard_players.season = excluded.season
-          then greatest(leaderboard_players.pulls, excluded.pulls) else excluded.pulls end,
-        season = excluded.season,
-        updated_at = now()
-    `;
-    return { ok: true };
+    return initPlayerSession(sql, data);
   });
 
-export const getLeaderboard = createServerFn({ method: "GET" }).handler(async (): Promise<LeaderRow[]> => {
-  const { getSql } = await import("@/lib/db");
-  const sql = await getSql();
-  const rows = await sql<{
-    id: string;
-    name: string;
-    spins: number;
-    level: number;
-    fives: number;
-    pulls: number;
-    updated_at: Date | string;
-  }>`
-    select id, name, spins, level, fives, pulls, updated_at
-    from leaderboard_players
-    where season = ${SEASON}
-    order by spins desc, fives desc, updated_at asc
-    limit 50
-  `;
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    spins: Number(r.spins),
-    level: Number(r.level),
-    fives: Number(r.fives),
-    pulls: Number(r.pulls),
-    updatedAt: new Date(r.updated_at).toISOString(),
-  }));
-});
+export const setPlayerName = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    const name = cleanName(d.name);
+    if (name.length < 2) throw new Error("Нікнейм має бути від 2 символів");
+    return { ...auth, name };
+  })
+  .handler(async ({ data }): Promise<PlayerSnapshot> => {
+    const [{ getSql }, { updatePlayerName }] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
+    const sql = await getSql();
+    return updatePlayerName(sql, data);
+  });
+
+export const spinWheel = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return {
+      ...auth,
+      seq: cleanSeq(d.seq),
+      name: typeof d.name === "string" ? cleanName(d.name) : undefined,
+    };
+  })
+  .handler(async ({ data }): Promise<SpinExecutionResult> => {
+    const [{ getSql }, { executeServerSpin }] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
+    const sql = await getSql();
+    return executeServerSpin(sql, data);
+  });
+
+export const clearBlackoutServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return { ...auth, seq: cleanSeq(d.seq) };
+  })
+  .handler(async ({ data }): Promise<PlayerSnapshot> => {
+    const [{ getSql }, { executeClearBlackout }] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
+    const sql = await getSql();
+    return executeClearBlackout(sql, data);
+  });
+
+export const pullBanner = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    const count = Number(d.count);
+    if (count !== 1 && count !== 10) throw new Error("Можна молитися лише ×1 або ×10");
+    return {
+      ...auth,
+      seq: cleanSeq(d.seq),
+      count,
+      name: typeof d.name === "string" ? cleanName(d.name) : undefined,
+    };
+  })
+  .handler(async ({ data }): Promise<PullServerResult> => {
+    const [{ getSql }, { executeServerPull }] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
+    const sql = await getSql();
+    return executeServerPull(sql, data);
+  });
+
+export const claimAidServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return {
+      ...auth,
+      seq: cleanSeq(d.seq),
+      name: typeof d.name === "string" ? cleanName(d.name) : undefined,
+    };
+  })
+  .handler(async ({ data }): Promise<PlayerSnapshot> => {
+    const [{ getSql }, { executeServerAid }] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
+    const sql = await getSql();
+    return executeServerAid(sql, data);
+  });
+
+export const exchangeShardsServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return { ...auth, seq: cleanSeq(d.seq) };
+  })
+  .handler(async ({ data }): Promise<PlayerSnapshot> => {
+    const [{ getSql }, { executeServerExchange }] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
+    const sql = await getSql();
+    return executeServerExchange(sql, data);
+  });
+
+export const toggleEquipServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    const unitId = String(d.unitId ?? "");
+    if (!unitId || unitId.length > 40) throw new Error("Невідомий юніт");
+    return { ...auth, seq: cleanSeq(d.seq), unitId };
+  })
+  .handler(async ({ data }): Promise<{ status: "equipped" | "removed" | "full" | "locked"; state: PlayerSnapshot }> => {
+    const [{ getSql }, { executeServerEquip }] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
+    const sql = await getSql();
+    return executeServerEquip(sql, data);
+  });
+
+export const sacrificeRookServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return { ...auth, seq: cleanSeq(d.seq) };
+  })
+  .handler(async ({ data }): Promise<PlayerSnapshot> => {
+    const [{ getSql }, { executeServerRook }] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/anticheat.server"),
+    ]);
+    const sql = await getSql();
+    return executeServerRook(sql, data);
+  });
