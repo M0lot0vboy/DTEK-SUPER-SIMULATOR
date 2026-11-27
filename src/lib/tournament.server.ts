@@ -649,6 +649,8 @@ export async function executeTournamentSpin(
 
   const triggeredBlackout = currentOverload > 0 && randomInt(0, 100) < currentOverload;
 
+  const pickQuip = (list: readonly string[]): string => list[randomInt(0, list.length)]!;
+
   if (triggeredBlackout && entry.shielded) {
     outcomeKind = "shield_saved";
     sliceIndex = TOURNAMENT_SLICES.findIndex((s) => s.id === "shield");
@@ -658,7 +660,11 @@ export async function executeTournamentSpin(
     nextShielded = false;
     nextOverload = Math.max(0, currentOverload - 15);
     nextStreak = currentStreak + 1;
-    note = "Синя Ізолента втримала коротке замикання! Котел і множник у безпеці (−15% ризику).";
+    note = pickQuip([
+      "Синя ізолента відбила КЗ прямо в розетку сусіду! Котел і множник цілі (−15% ризику).",
+      "Трансформатор чхнув, але 4 шари синьої ізоленти сказали «не сьогодні» (−15% ризику).",
+      "Іскра вдарила по щитку, глянула на ізоленту та пішла додому. Пронесло (−15% ризику)!",
+    ]);
   } else if (triggeredBlackout) {
     outcomeKind = "blackout";
     sliceIndex = 7;
@@ -670,7 +676,13 @@ export async function executeTournamentSpin(
     nextStreak = 0;
     nextShielded = false;
     nextBlackouts += 1;
-    note = `Коротке замикання спалило незафіксований котел, але твій Банк ${entry.banked_score} ${TOURNAMENT_CURRENCY_SHORT} не постраждав!`;
+    const blackoutJoke = pickQuip([
+      "Хтось увімкнув чайник о 18:01 — пробка вилетіла на орбіту!",
+      "Сусід підключив зварювальний апарат до твого подовжувача. Котлу гаплик!",
+      "Черга 4.2 раптово передала тобі привіт без попередження.",
+      "Кіт сів на кнопку аварійного вимкнення! Котел випарувався.",
+    ]);
+    note = `${blackoutJoke} Банк (${entry.banked_score} ${TOURNAMENT_CURRENCY_SHORT}) навіть не дригнув!`;
   } else {
     const picked = pickWeightedSlice();
     sliceIndex = picked.index;
@@ -696,7 +708,43 @@ export async function executeTournamentSpin(
     nextStreak = currentStreak + 1;
     const potPreview = previewPotentialBank(nextPot, nextMult);
     nextPeak = Math.max(currentPeak, potPreview);
-    note = `${slice.sublabel} · у котлі вже ${potPreview} ${TOURNAMENT_CURRENCY_SHORT}`;
+    const sliceExtras: Partial<Record<typeof slice.id, readonly string[]>> = {
+      watts_120: [
+        "Знайшов 2% заряду у старій Nokia 3310. Достатньо!",
+        "Поки сусід шукав ліхтарик, ти тихо качнув лічильник.",
+      ],
+      watts_220: [
+        "Кіт Барсик розігнав динамо-машину на кухні до 3000 об/хв!",
+        "Підключив павербанк сам у себе — фізика плаче, бали капають.",
+      ],
+      watts_360: [
+        "Магніт з холодильника робить дива з показниками!",
+        "Випадково перекинув фазу з будівлі міськради — світло аж сліпить.",
+      ],
+      watts_550: [
+        "Твій балкон світиться яскравіше за ліхтар над АТБ!",
+        "Диспетчер дзвонить спитати, звідки у тебе своя АЕС!",
+      ],
+      pot_x2: [
+        "Помилка округлення 1С: твій котел випадково подвоївся!",
+        "Хакнув графік двома свічками і палкою ковбаси — котел ×2!",
+      ],
+      mult_up: [
+        "Три подовжувачі в один трійник — пахне перемогою (і легким димком)!",
+        "Множник зірвав пломбу на лічильнику!",
+      ],
+      shield: [
+        "Свята синя ізолента замотала щиток у 4 шари — КЗ не пройде!",
+        "Навіть блискавка боїться цієї ізоленти з 2007 року.",
+      ],
+      surge: [
+        "Бойлер, фен і тостер увімкнено разом — екстрим на межі фолу!",
+        "Дроти вже червоні, зате Копіум-Вати течуть рікою!",
+      ],
+    };
+    const extraList = sliceExtras[slice.id];
+    const quip = extraList ? pickQuip(extraList) : slice.sublabel;
+    note = `${quip} У котлі: ${potPreview} ${TOURNAMENT_CURRENCY_SHORT}`;
   }
 
   const updated = await sql<DbTournamentEntryRow>`

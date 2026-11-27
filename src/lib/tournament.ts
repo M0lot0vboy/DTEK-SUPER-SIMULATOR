@@ -35,8 +35,8 @@ export type TournamentSlice = {
 export const TOURNAMENT_SLICES: readonly TournamentSlice[] = [
   {
     id: "watts_120",
-    label: "+120 кВт·LOL",
-    sublabel: "Свічко-Імпульс",
+    label: "БОРЩ +120 кВт·LOL",
+    sublabel: "Зарядився від сусідського чайника, поки той спав",
     color: "#38bdf8",
     weight: 22,
     watts: 120,
@@ -45,8 +45,8 @@ export const TOURNAMENT_SLICES: readonly TournamentSlice[] = [
   },
   {
     id: "watts_220",
-    label: "+220 кВт·LOL",
-    sublabel: "Балконний Дизель",
+    label: "КІТ +220 кВт·LOL",
+    sublabel: "Кіт Барсик крутить педалі на балконі — лічильник у шоці",
     color: "#34d399",
     weight: 19,
     watts: 220,
@@ -55,8 +55,8 @@ export const TOURNAMENT_SLICES: readonly TournamentSlice[] = [
   },
   {
     id: "watts_360",
-    label: "+360 кВт·LOL",
-    sublabel: "Підкрутка Лічильника",
+    label: "МАГНІТ +360 кВт·LOL",
+    sublabel: "Приліпив магніт з АТБ — ДТЕК тепер винен тобі",
     color: "#fbbf24",
     weight: 14,
     watts: 360,
@@ -65,8 +65,8 @@ export const TOURNAMENT_SLICES: readonly TournamentSlice[] = [
   },
   {
     id: "watts_550",
-    label: "+550 кВт·LOL",
-    sublabel: "Мега-Копіум Прорив",
+    label: "МАЙН +550 кВт·LOL",
+    sublabel: "Балконний EcoFlow вийшов на надзвукову тягу!",
     color: "#f97316",
     weight: 8,
     watts: 550,
@@ -75,8 +75,8 @@ export const TOURNAMENT_SLICES: readonly TournamentSlice[] = [
   },
   {
     id: "pot_x2",
-    label: "КОТЕЛ ×2",
-    sublabel: "Двозонний Тариф",
+    label: "1С БАГ ×2",
+    sublabel: "Диспетчер переплутав Excel — весь котел помножено на 2!",
     color: "#a855f7",
     weight: 9,
     watts: 0,
@@ -86,8 +86,8 @@ export const TOURNAMENT_SLICES: readonly TournamentSlice[] = [
   },
   {
     id: "mult_up",
-    label: "+0.75× МНОЖНИК",
-    sublabel: "Турбо-Фаза",
+    label: "ОФШОР +0.75×",
+    sublabel: "Врізався в розетку ліфта · множник полетів у космос",
     color: "#ec4899",
     weight: 11,
     watts: 100,
@@ -96,8 +96,8 @@ export const TOURNAMENT_SLICES: readonly TournamentSlice[] = [
   },
   {
     id: "shield",
-    label: "ІЗОЛЕНТА 🛡️",
-    sublabel: "Захист від 1 КЗ · −12% ризику",
+    label: "СВЯТА ІЗОЛЕНТА 🛡️",
+    sublabel: "4 шари синьої ізоленти: щит від 1 КЗ + −12% ризику",
     color: "#22d3ee",
     weight: 10,
     watts: 90,
@@ -108,13 +108,49 @@ export const TOURNAMENT_SLICES: readonly TournamentSlice[] = [
   },
   {
     id: "surge",
-    label: "+420 / АВРАЛ!",
-    sublabel: "Висока напруга · +30% ризику",
+    label: "БОЙЛЕР +420!!",
+    sublabel: "Сусід врубив бойлер і фен: жирно, але дроти червоні (+30% КЗ)",
     color: "#ef4444",
     weight: 7,
     watts: 420,
     multBpsAdd: 4500,
     riskAdd: 30,
+  },
+] as const;
+
+export type RelicPowerTierId = "low" | "medium" | "high" | "extreme";
+
+export type RelicPowerPreset = {
+  id: RelicPowerTierId;
+  label: string;
+  tag: string;
+  buff: RelicBuff;
+};
+
+export const RELIC_POWER_PRESETS: readonly RelicPowerPreset[] = [
+  {
+    id: "low",
+    label: "Низький (Low)",
+    tag: "Легкий трофей для швидких міні-турнірів",
+    buff: { gemsPct: 10, drainReductionPct: 5, onBonus: 2, refundPct: 4 },
+  },
+  {
+    id: "medium",
+    label: "Середній (Medium)",
+    tag: "Збалансований буст на кожен день",
+    buff: { gemsPct: 20, drainReductionPct: 12, onBonus: 4, refundPct: 8 },
+  },
+  {
+    id: "high",
+    label: "Високий (High)",
+    tag: "Солідна нагорода за серйозну битву",
+    buff: { gemsPct: 32, drainReductionPct: 18, onBonus: 7, refundPct: 14 },
+  },
+  {
+    id: "extreme",
+    label: "Екстрим (Extreme)",
+    tag: "Максимально дозволені сервером імба-стати",
+    buff: { gemsPct: 45, drainReductionPct: 25, onBonus: 10, refundPct: 20 },
   },
 ] as const;
 
@@ -129,14 +165,14 @@ export const DEFAULT_TOP1_RELIC: RelicBlueprint = {
   name: "Корона Головного Диспетчера",
   emoji: "👑",
   lore: "Видана абсолютному чемпіону турніру Блекаут-Ралі за сталеві нерви.",
-  buff: { drainReductionPct: 18, gemsPct: 30, onBonus: 6, refundPct: 12 },
+  buff: { ...RELIC_POWER_PRESETS[2]!.buff },
 };
 
 export const DEFAULT_TOP2_RELIC: RelicBlueprint = {
   name: "Позолочений Павербанк Віце-Мага",
   emoji: "🥈",
   lore: "Трофей срібного призера турніру Блекаут-Ралі. Світиться у темряві.",
-  buff: { drainReductionPct: 12, gemsPct: 20, onBonus: 4, refundPct: 8 },
+  buff: { ...RELIC_POWER_PRESETS[1]!.buff },
 };
 
 export function sanitizeRelicBlueprint(raw: unknown, fallback: RelicBlueprint): RelicBlueprint {

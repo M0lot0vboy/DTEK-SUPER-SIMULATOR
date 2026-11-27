@@ -13,6 +13,7 @@ import {
 } from "@/lib/game/data";
 import { useGame, batteryDrain, eventChance, migrateLegacy } from "@/lib/game/store";
 import { chord, tick } from "@/lib/game/audio";
+import { startWheelSpinAnimation, type SpinAnimationHandle } from "@/lib/wheel-anim";
 import useSWR from "swr";
 import { Hud } from "@/components/game/hud";
 import { Quests } from "@/components/game/quests";
@@ -41,80 +42,93 @@ export const Route = createFileRoute("/")({ component: Home });
 const OFF_NOTES = [
   "Планові роботи. Свічки вже в моді, чайник — ні.",
   "Диспетчер пішов на каву. Кава теж без світла.",
-  "Холодильник почав переговори з сусідами.",
-  "Графік є. Просто він секретний і кривий.",
-  "Ліфт образився і теж пішов у відключку.",
+  "Холодильник почав переговори з сусідами за борщ.",
+  "Графік є. Просто він секретний, кривий і в Excel 97.",
+  "Ліфт образився і застряг між 4-м і 5-м. Сусіди створили ОСББ.",
+  "Рубильник упав сам, бо кіт диспетчера хотів погратися.",
+  "ДТЕК вибачився мемом з капібарою. Світла це не додало.",
 ];
 
 const ON_NOTES = [
-  "Диво. Розетка ще жива. Не вір до кінця.",
-  "Світло є. Постав чайник, поки не передумали.",
-  "Павербанк може відпочити. Хвилин на сорок.",
-  "Холодильник видихнув. Ковбаса врятована.",
-  "Рідкісний момент. Навіть праска не вірить.",
+  "Диво. Розетка ще жива. Не дихай, аби не злякати.",
+  "Світло є. Встигни зварити каву, попрати слона і зарядити все.",
+  "Павербанк може відпочити. Хвилин на сорок (максимум).",
+  "Холодильник видихнув. Ковбаса врятована й отримала амністію.",
+  "Рідкісний момент. Навіть праска замислилась про сенс життя.",
+  "Сусіди одночасно запустили пралки — мережа тремтить, але тримається!",
 ];
 
 const BLINK_END = [
-  "Три хвилини минули. Світло пішло без прощання.",
-  "Воно було. Воно стало легендою.",
-  "Скінчилось. Ліхтарик знову головний герой.",
+  "Три хвилини минули. Світло пішло навіть не сказавши «па-па».",
+  "Воно було. Воно стало легендою для онуків.",
+  "Скінчилось. Діставай ліхтарик і роби театр тіней.",
 ];
 
 const BLACKOUT_NOTES = [
-  "Селище. Район. Можливо, область. Запали свічку.",
-  "Темрява настільки глибока, що сусід став чутним.",
-  "Блакаут. Час перевірити, куди ти поклав ліхтарик. Скрізь.",
+  "Селище. Район. Можливо, вся область. Запалюй свічку, шефе!",
+  "Темрява настільки глибока, що чути, як у сусіда скисає молоко.",
+  "Блакаут. Час шукати ліхтарик другим ліхтариком (який теж на 2%).",
+  "Офіційно: черга 4.2 пробила дно і пішла в мінус.",
 ];
 
 const GENERATOR_NOTES = [
-  "Генератор — твій. Не вимкненний. Сусіди заздрять.",
-  "Джекпот! Тепер ти найпопулярніша людина в будинку.",
-  "Генератор схоплений. Заводи його, шеф.",
+  "Генератор — твій. Гуде як трактор, зате сусіди вже несуть борщ за зарядку!",
+  "Джекпот! Тепер ти найпопулярніша людина в під'їзді (і трохи олігарх).",
+  "Генератор схоплений. Сусід знизу заздрісно заглядає у вікно з подовжувачем.",
 ];
 
 const RESPIN_NOTES = [
-  "Графік загубили десь між двома екселями. Крутимо ще, безкоштовно.",
-  "Диспетчер випадково натиснув Ctrl+Z. Ще один оберт.",
-  "План відключень оновився, поки колесо крутилось. Пере-крут!",
+  "Графік загубили десь між двома екселями. Крутимо ще, безкоштовно!",
+  "Диспетчер випадково натиснув Ctrl+Z на рубильнику. Ще один оберт!",
+  "План відключень перемалювали прямо в польоті. Лови безкоштовний пере-крут!",
+  "Кіт пробіг по клавіатурі ДТЕК — колесо йде на друге коло!",
+];
+
+const SPINNING_QUIPS = [
+  "рахуємо графік на пальцях…",
+  "питаємо у кота Барсика…",
+  "диспетчер підкидає монетку…",
+  "дуємо на трансформатор…",
+  "перевіряємо чергу 4.2…",
 ];
 
 const HEADLINES = [
-  "ДТЕК: вимикання перенесено на час, який ми вам ще не сказали",
+  "ДТЕК: вимикання перенесено на час, який ми вам ще не вигадали",
   "Офіційно: стабільна нестабільність — наша найстабільніша риса",
-  "Свіжо: павербанк побачив сонце вперше за тиждень",
-  "Міська рада синхронізувала графіки. Обидва. Вони не збігаються",
-  "Погодне попередження: вночі +7, у квартирі — так само",
-  "Розетка повідомила, що їй «треба трохи наспатися»",
-  "Компенсація за відключення видано свічками. Двома",
-  "Вчений пояснив: якщо вимкнули о 18:00, могло вимкнутися й раніше",
-  "Рейд-бос тижня знову виріс із графіка відключень",
-  "Гача-банер: шанс 5★ зріс. З 0.6% до 0.6%, але зріс морально",
+  "Свіжо: павербанк побачив сонце вперше за тиждень і розплакався",
+  "Міська рада синхронізувала графіки. Обидва. Вони досі не збігаються",
+  "Погодне попередження: вночі +7, у квартирі — як у душі у диспетчера",
+  "Розетка повідомила, що їй «треба трохи наспатися» до вівторка",
+  "Компенсацію за відключення видано свічками та обіймами",
+  "Вчений довів: якщо вимкнули о 18:00, могло вимкнутися ще о 17:42",
+  "Рейд-бос тижня знову виріс прямо з таблички графіків",
+  "Блекаут-Ралі: учасники масово мігрують у Копіум-Вати (кВт·LOL)",
 ];
 
 const PROPHECIES = [
-  "Сьогодні чайник піддасться кип'ятінню. Вірь у себе.",
-  "Фортуна каже: тримай павербанк ближче, ніж друзів.",
-  "Сусід збиратиме генератор о 21:00. Ти почуєш.",
-  "День сприятливий для свічок, пледів і медитації.",
-  "Не починай прання після 17:00. Воно помститься.",
-  "Сьогодні світло любитиме тебе. Але недовго.",
-  "Зірки радять: поставити чайник ще вдень, на всякий.",
-  "Твій холодильник сьогодні в зоні ризику. І ковбаса теж.",
+  "Сьогодні чайник піддасться кип'ятінню з першого разу. Вірь у диво.",
+  "Фортуна шепоче: тримай павербанк ближче, ніж деяких друзів.",
+  "Сусід заведе генератор рівно о 21:00. Прости йому.",
+  "День сприятливий для свічок, пледів та вдалих круток у турнірі.",
+  "Не починай прання о 17:55. Барабан запам'ятає цю зраду.",
+  "Сьогодні світло любитиме тебе. Але недовго й не всюди.",
+  "Зірки радять: закип'ятити термос ще до першої тривоги.",
+  "Твій холодильник сьогодні в зоні ризику. З'їж ковбасу превентивно.",
 ];
 
 const EVENTS = [
   { title: "ЗАНЯТТЯ ВІДМІНИЛИ", text: "Школу закрили. Діти вдома. Тиша померла о 8:05.", delta: 0 },
-  { title: "СУСІД О 3-Й НОЧІ", text: "Генератор о 3:00 ночі. Сон не входить у графік стабільності.", delta: -8 },
-  { title: "КУР'ЄР ПЕШКОМ", text: "Піца прийшла холодною. Кур'ер теж. Але прийшла.", delta: 0 },
+  { title: "СУСІД О 3-Й НОЧІ", text: "Генератор о 3:00 під вікном. Сон не входить у графік стабільності.", delta: -8 },
+  { title: "КУР'ЄР ПЕШКОМ", text: "Піца прийшла на 14-й поверх пішки. Кур'єр тепер КМС з альпінізму.", delta: 0 },
   { title: "КІТ ПРОТИ СВІЧКИ", text: "Кіт знайшов свічку. Свічка програла. Ковбаса підозріло спостерігала.", delta: 0 },
-  { title: "ЛІФТ ЗАРОБІВ", text: "Ліфт запрацював. Будинок у шоці, пішоходи дезорієнтовані.", delta: 0 },
-  { title: "ГАРЯЧА ВОДА", text: "Гаряча вода прийшла без попередження. Прийми ванну, поки не збагнула.", delta: 5 },
-  { title: "ЗНИЖКА НА СВІЧКИ", text: "На ринку -30% на свічки. Інфляція темряви пішла вниз.", delta: 0 },
-  { title: "СОНЦЕ ВИЙШЛО", text: "Сонячна панель блиснула. Павербанк поїв сонця до 100% настрою.", delta: 12 },
-  { title: "СУСІД ДАЄ ЗАРЯДКУ", text: "За борщ. Дров не треба, борщ — обов'язково.", delta: 10 },
-  { title: "ЧАЙНИК ВСТИГ", text: "Встиг закип'ятити за 40 секунд до відключки. Дрібна, але перемога.", delta: 4 },
-  { title: "ВАЙФАЙ ПАДАЄ", text: "Вайфай помер разом зі світлом. Мобільний тепер головний стендапер.", delta: 0 },
-  { title: "ЗУСТРІЧ ВІДМІНЕНА", text: "Zoom падає у всій країні однаково. Відмова зустрічі — патріотична.", delta: 0 },
+  { title: "ЛІФТ ЗАРОБІВ", text: "Ліфт несподівано поїхав! Сусіди фотографуються з ним на пам'ять.", delta: 0 },
+  { title: "ГАРЯЧА ВОДА", text: "Гаряча вода пішла без попередження. Прийми ванну, поки не схаменулася.", delta: 5 },
+  { title: "ЗНИЖКА НА СВІЧКИ", text: "На ринку −30% на свічки. Інфляція темряви пішла вниз.", delta: 0 },
+  { title: "СОНЦЕ ВИЙШЛО", text: "Сонячна панель на балконі зловила промінь — павербанк аж мурчить!", delta: 12 },
+  { title: "СУСІД ДАЄ ЗАРЯДКУ", text: "За тарілку борщу! Дров не треба, сметана — обов'язково.", delta: 10 },
+  { title: "ЧАЙНИК ВСТИГ", text: "Закипів за 12 секунд до відключки. Це було кінематографічно.", delta: 4 },
+  { title: "ВАЙФАЙ ВПАВ", text: "Вайфай помер разом зі світлом. 1-ша поділка LTE тепер твій король.", delta: 0 },
+  { title: "ЗУСТРІЧ ВІДМІНЕНА", text: "Zoom упав у всього району. Відмазка «нема світла» знову працює!", delta: 0 },
 ];
 
 const OFF_BONUS = ["свічка +1", "плед уже гріється", "ліхтарик на 12%", "сусід кричить «знову»"];
@@ -162,8 +176,9 @@ function Home() {
   const [event, setEvent] = useState<(typeof EVENTS)[number] | null>(null);
   const [tab, setTab] = useState<Tab>("isekai");
   const [spinEvent, setSpinEvent] = useState<ActiveSpinEvent | null>(null);
-  const [spinMs, setSpinMs] = useState(SPIN_DURATION_NORMAL_MS);
-  const timer = useRef<number | null>(null);
+  const [spinQuip, setSpinQuip] = useState(SPINNING_QUIPS[0]!);
+  const wheelElRef = useRef<HTMLDivElement | null>(null);
+  const animRef = useRef<SpinAnimationHandle | null>(null);
 
   const { data: tournamentState } = useSWR(
     ready ? TOURNAMENT_KEY : null,
@@ -211,7 +226,7 @@ function Home() {
     setReady(true);
     return () => {
       window.clearInterval(iv);
-      if (timer.current !== null) window.clearTimeout(timer.current);
+      animRef.current?.cancel();
     };
   }, []);
 
@@ -225,6 +240,7 @@ function Home() {
   async function spin() {
     if (spinning || spinPending || blackout || doom || !ready) return;
     setSpinPending(true);
+    setSpinQuip(pick(SPINNING_QUIPS));
     setResult(null);
     setFlash(null);
     setCountdown(null);
@@ -245,131 +261,131 @@ function Home() {
     const outcome = res.outcome;
     const turbo = res.turbo;
     const active = res.activeEventBefore;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const duration = turbo ? SPIN_DURATION_TURBO_MS : SPIN_DURATION_NORMAL_MS;
-
-    if (!reduced) {
-      const turns = (turbo ? 3 : 5) + Math.floor(Math.random() * 3);
-      const jitter = (Math.random() - 0.5) * (30 * 0.5);
-      const currentMod = ((rotation % 360) + 360) % 360;
-      const desiredMod = (((360 - (index * 30 + 15) + jitter) % 360) + 360) % 360;
-      let delta = desiredMod - currentMod;
-      if (delta < 0) delta += 360;
-      const next = rotation + turns * 360 + delta;
-      setRotation(next);
-    }
 
     setSpinPending(false);
     setSpinning(true);
-    setSpinMs(reduced ? 0 : duration);
 
-    let clicks = 0;
-    const clickTimer = reduced
-      ? null
-      : window.setInterval(() => {
-          clicks += 1;
-          tick(180 + (clicks % 4) * 40, 0.03);
-          if (clicks > 18) window.clearInterval(clickTimer!);
-        }, turbo ? 70 : 180);
+    animRef.current?.cancel();
+    animRef.current = startWheelSpinAnimation({
+      getElement: () => wheelElRef.current,
+      fromDeg: rotation,
+      sliceIndex: index,
+      sliceCount: WHEEL_SLICES.length,
+      durationMs: duration,
+      turns: (turbo ? 3 : 5) + Math.floor(Math.random() * 2),
+      wedgeDeg: 30,
+      onWedgeTick: (step) => tick(180 + (step % 4) * 40, 0.03),
+      onFinish: (finalMod) => {
+        setRotation(finalMod);
+        setSpinning(false);
+        setResult(outcome);
+        setFlash(outcome);
+        window.setTimeout(() => setFlash(null), 700);
 
-    timer.current = window.setTimeout(() => {
-      if (clickTimer !== null) window.clearInterval(clickTimer);
-      setSpinning(false);
-      setResult(outcome);
-      setFlash(outcome);
-      window.setTimeout(() => setFlash(null), 700);
+        const drainBase =
+          outcome === "off"
+            ? -15
+            : outcome === "blackout"
+              ? -30
+              : outcome === "on"
+                ? 8
+                : outcome === "generator"
+                  ? 45
+                  : outcome === "blink"
+                    ? 3
+                    : 0;
+        const shielded = active?.kind === "shield";
+        const buffs = loadoutBuffs();
+        const drain =
+          drainBase < 0
+            ? shielded
+              ? 0
+              : Math.round(batteryDrain(drainBase, pet) * buffs.drain)
+            : drainBase;
+        const batteryNext = Math.min(100, Math.max(0, g.battery + drain));
+        const kwBefore = useGame.getState().kw;
+        useGame.getState().completeSpin(outcome, batteryNext, { spins: res.state.spins, xp: res.state.xp });
+        if (active?.kind === "double") {
+          const gained = useGame.getState().kw - kwBefore;
+          if (gained > 0) useGame.setState((s) => ({ kw: s.kw + gained }));
+        }
 
-      const drainBase = outcome === "off" ? -15 : outcome === "blackout" ? -30 : outcome === "on" ? 8 : outcome === "generator" ? 45 : outcome === "blink" ? 3 : 0;
-      const shielded = active?.kind === "shield";
-      const buffs = loadoutBuffs();
-      const drain =
-        drainBase < 0
-          ? shielded
-            ? 0
-            : Math.round(batteryDrain(drainBase, pet) * buffs.drain)
-          : drainBase;
-      const batteryNext = Math.min(100, Math.max(0, g.battery + drain));
-      const kwBefore = useGame.getState().kw;
-      useGame.getState().completeSpin(outcome, batteryNext, { spins: res.state.spins, xp: res.state.xp });
-      if (active?.kind === "double") {
-        const gained = useGame.getState().kw - kwBefore;
-        if (gained > 0) useGame.setState((s) => ({ kw: s.kw + gained }));
-      }
-
-      setSpinEvent(res.nextSpinEvent);
-      if (!active && res.nextSpinEvent) {
-        const def = SPIN_EVENTS[res.nextSpinEvent.kind];
-        chord();
-        useGame.getState().pushToast(def.title, `${def.desc} (${def.spins} обертів)`, def.color);
-      }
-
-      applyServerSnapshot(res.state, { onlyIfNotBehind: true });
-      void mutate(LEADERBOARD_KEY);
-
-      if ((outcome === "on" || outcome === "blink") && buffs.onBonus > 0) {
-        useGame.getState().applyBatteryDelta(buffs.onBonus);
-      }
-      if (res.refunded) {
-        useGame.getState().pushToast("Загін подвоїв видобуток", `+${res.gemsGained} кВт-гемів`, "#a879f0");
-      }
-      if (res.queueProc) {
-        useGame.getState().applyBatteryDelta(20);
-        useGame.getState().pushToast("98%… КРАШ", "Атемпт 147 204. Queue 4.2 вибила напругу: павербанк +20%", "#5ec4b3");
-      }
-
-      const finalBattery = useGame.getState().battery;
-      if (finalBattery >= 100 && g.battery < 100) useGame.getState().unlock("full");
-
-      const st = useGame.getState();
-      if (st.last[0] === "on" && st.last[1] === "on" && st.last[2] === "on") st.unlock("optimist");
-      if (st.last[0] === "off" && st.last[1] === "off" && st.last[2] === "off") st.unlock("darklord");
-      if (outcome === "generator") st.unlock("generator");
-
-      switch (outcome) {
-        case "off":
-          tick(110, 0.18);
-          setNote(pick(OFF_NOTES));
-          setBonus(pick(OFF_BONUS));
-          break;
-        case "on":
-          tick(440, 0.18);
-          setNote(pick(ON_NOTES));
-          setBonus(pick(ON_BONUS));
-          break;
-        case "blink":
+        setSpinEvent(res.nextSpinEvent);
+        if (!active && res.nextSpinEvent) {
+          const def = SPIN_EVENTS[res.nextSpinEvent.kind];
           chord();
-          setCountdown(30);
-          setNote("Світло увімкнули. На три хвилини. Диспетчер тестує модем.");
-          setBonus("біжи за чайником");
-          break;
-        case "blackout":
-          tick(70, 0.4);
-          setBlackout(true);
-          setCandleClicks(0);
-          setNote(pick(BLACKOUT_NOTES));
-          setBonus("запали свічку, щоб продовжити");
-          break;
-        case "generator":
-          chord();
-          setConfetti(true);
-          window.setTimeout(() => setConfetti(false), 3200);
-          setNote(pick(GENERATOR_NOTES));
-          setBonus("павербанк +45%");
-          break;
-        case "respin":
-          tick(330, 0.12);
-          setNote(pick(RESPIN_NOTES));
-          setBonus("безкоштовний оберт");
-          useGame.getState().pushToast("Графік зник", "Оберт безкоштовний. Крути ще.", "#a99cee");
-          break;
-      }
+          useGame.getState().pushToast(def.title, `${def.desc} (${def.spins} обертів)`, def.color);
+        }
 
-      if (Math.random() < eventChance(pet)) {
-        const ev = pick(EVENTS);
-        setEvent(ev);
-        if (ev.delta !== 0) useGame.getState().applyBatteryDelta(ev.delta);
-      }
-    }, duration);
+        applyServerSnapshot(res.state, { onlyIfNotBehind: true });
+        void mutate(LEADERBOARD_KEY);
+
+        if ((outcome === "on" || outcome === "blink") && buffs.onBonus > 0) {
+          useGame.getState().applyBatteryDelta(buffs.onBonus);
+        }
+        if (res.refunded) {
+          useGame.getState().pushToast("Загін подвоїв видобуток", `+${res.gemsGained} кВт-гемів`, "#a879f0");
+        }
+        if (res.queueProc) {
+          useGame.getState().applyBatteryDelta(20);
+          useGame.getState().pushToast("98%… КРАШ", "Атемпт 147 204. Queue 4.2 вибила напругу: павербанк +20%", "#5ec4b3");
+        }
+
+        const finalBattery = useGame.getState().battery;
+        if (finalBattery >= 100 && g.battery < 100) useGame.getState().unlock("full");
+
+        const st = useGame.getState();
+        if (st.last[0] === "on" && st.last[1] === "on" && st.last[2] === "on") st.unlock("optimist");
+        if (st.last[0] === "off" && st.last[1] === "off" && st.last[2] === "off") st.unlock("darklord");
+        if (outcome === "generator") st.unlock("generator");
+
+        switch (outcome) {
+          case "off":
+            tick(110, 0.18);
+            setNote(pick(OFF_NOTES));
+            setBonus(pick(OFF_BONUS));
+            break;
+          case "on":
+            tick(440, 0.18);
+            setNote(pick(ON_NOTES));
+            setBonus(pick(ON_BONUS));
+            break;
+          case "blink":
+            chord();
+            setCountdown(30);
+            setNote("Світло увімкнули. На три хвилини. Диспетчер тестує модем.");
+            setBonus("біжи за чайником");
+            break;
+          case "blackout":
+            tick(70, 0.4);
+            setBlackout(true);
+            setCandleClicks(0);
+            setNote(pick(BLACKOUT_NOTES));
+            setBonus("запали свічку, щоб продовжити");
+            break;
+          case "generator":
+            chord();
+            setConfetti(true);
+            window.setTimeout(() => setConfetti(false), 3200);
+            setNote(pick(GENERATOR_NOTES));
+            setBonus("павербанк +45%");
+            break;
+          case "respin":
+            tick(330, 0.12);
+            setNote(pick(RESPIN_NOTES));
+            setBonus("безкоштовний оберт");
+            useGame.getState().pushToast("Графік зник", "Оберт безкоштовний. Крути ще.", "#a99cee");
+            break;
+        }
+
+        if (Math.random() < eventChance(pet)) {
+          const ev = pick(EVENTS);
+          setEvent(ev);
+          if (ev.delta !== 0) useGame.getState().applyBatteryDelta(ev.delta);
+        }
+      },
+    });
   }
 
   useEffect(() => {
@@ -592,13 +608,10 @@ function Home() {
           </div>
 
           <div
-            className={`absolute inset-3 rounded-full border border-line bg-ink shadow-[0_20px_60px_rgba(0,0,0,0.45)] ${dark ? "animate-flicker opacity-30" : ""}`}
+            ref={wheelElRef}
+            className={`absolute inset-3 rounded-full border border-line bg-ink shadow-[0_20px_60px_rgba(0,0,0,0.45)] will-change-transform ${dark ? "animate-flicker opacity-30" : ""}`}
             style={{
-              transform: `rotate(${rotation}deg)`,
-              transition:
-                spinning && spinMs > 0
-                  ? `transform ${spinMs}ms cubic-bezier(0.12, 0.72, 0.08, 1)`
-                  : "none",
+              transform: `translate3d(0, 0, 0) rotate(${rotation}deg)`,
             }}
           >
             <svg viewBox="0 0 100 100" className="h-full w-full">
@@ -617,7 +630,7 @@ function Home() {
           disabled={spinning || spinPending || blackout || doom || !ready}
           className="font-display relative z-10 mt-8 min-h-14 w-full max-w-xs rounded-full bg-amber px-8 text-base font-extrabold tracking-wide text-ink transition-transform enabled:hover:scale-[1.02] enabled:active:scale-[0.98] disabled:opacity-60"
         >
-          {spinning || spinPending ? "рахуємо графік…" : result ? "ще раз" : "крутити"}
+          {spinning || spinPending ? spinQuip : result ? "ще раз" : "крутити"}
         </button>
 
         <div className="mt-6 min-h-32 w-full max-w-md text-center" aria-live="polite">
@@ -629,7 +642,7 @@ function Home() {
               <p className="mt-2 text-sm text-muted">{prophecy}</p>
             </div>
           ) : null}
-          {spinning || spinPending ? <p className="font-display text-lg text-amber">колесо думає…</p> : null}
+          {spinning || spinPending ? <p className="font-display text-lg text-amber">{spinQuip}</p> : null}
           {result === "off" && !spinning && !spinPending ? (
             <ResultCard tone="off" icon={<ZapOff className="size-6" aria-hidden />} title="ВИМКНУЛИ" note={note} bonus={bonus} />
           ) : null}

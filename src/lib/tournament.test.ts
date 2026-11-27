@@ -7,6 +7,7 @@ import { PGlite } from "@electric-sql/pglite";
 import type { Sql } from "./db.ts";
 import { SEASON } from "./game/season.ts";
 import {
+  clampRelicBuff,
   computeBuffs,
   sanitizeCustomItems,
   sanitizeEquippedRelics,
@@ -32,7 +33,8 @@ import {
   joinTournament,
   settleDueTournaments,
 } from "./tournament.server.ts";
-import { computeRegeneratedCharges } from "./tournament.ts";
+import { RELIC_POWER_PRESETS, computeRegeneratedCharges } from "./tournament.ts";
+import { easeOutQuart } from "./wheel-anim.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -460,5 +462,26 @@ describe("Tournament, Custom Isekai Relics & Legacy Gacha Refund", () => {
     const afterCancel = await cancelAdminTournament(sql, "root_admin", cancelT.active!.id);
     assert.equal(afterCancel.active, null);
     assert.equal(afterCancel.history[0]?.status, "cancelled");
+  });
+
+  it("validates Low/Medium/High/Extreme relic power presets and wheel animation curve", () => {
+    assert.deepEqual(
+      RELIC_POWER_PRESETS.map((p) => p.id),
+      ["low", "medium", "high", "extreme"],
+    );
+    for (let i = 0; i < RELIC_POWER_PRESETS.length; i += 1) {
+      const preset = RELIC_POWER_PRESETS[i]!;
+      assert.deepEqual(clampRelicBuff(preset.buff), preset.buff);
+      if (i > 0) {
+        const prev = RELIC_POWER_PRESETS[i - 1]!.buff;
+        assert.ok(preset.buff.gemsPct > prev.gemsPct);
+        assert.ok(preset.buff.drainReductionPct > prev.drainReductionPct);
+        assert.ok(preset.buff.onBonus > prev.onBonus);
+        assert.ok(preset.buff.refundPct > prev.refundPct);
+      }
+    }
+    assert.equal(easeOutQuart(0), 0);
+    assert.equal(easeOutQuart(1), 1);
+    assert.ok(easeOutQuart(0.5) > 0.9);
   });
 });

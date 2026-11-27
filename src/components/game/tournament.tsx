@@ -15,6 +15,7 @@ import {
   Zap,
 } from "lucide-react";
 import { chord, tick } from "@/lib/game/audio";
+import { startWheelSpinAnimation, type SpinAnimationHandle } from "@/lib/wheel-anim";
 import {
   TOURNAMENT_KEY,
   fetchTournamentOverview,
@@ -54,15 +55,23 @@ function relicStatBadges(b: RelicBlueprint["buff"]): string[] {
 }
 
 const WHEEL_TEXT_MAP: Record<string, string> = {
-  watts_120: "+120 LOL",
-  watts_220: "+220 LOL",
-  watts_360: "+360 LOL",
-  watts_550: "+550 LOL",
-  pot_x2: "КОТЕЛ ×2",
-  mult_up: "+0.75×",
+  watts_120: "БОРЩ +120",
+  watts_220: "КІТ +220",
+  watts_360: "МАГНІТ",
+  watts_550: "МАЙН +550",
+  pot_x2: "1С БАГ ×2",
+  mult_up: "ОФШОР +.75",
   shield: "ІЗОЛЕНТА",
-  surge: "АВРАЛ +420",
+  surge: "БОЙЛЕР!!",
 };
+
+const T_SPINNING_QUIPS = [
+  "⚡ ЗАМИКАЄМО ФАЗУ…",
+  "🙏 МОЛИМОСЬ НА ІЗОЛЕНТУ…",
+  "🐈 БАРСИК КРУТИТЬ ПЕДАЛІ…",
+  "🔌 СУСІД ВРУБИВ БОЙЛЕР…",
+  "🧲 ПІДКРУЧУЄМО ЛІЧИЛЬНИК…",
+];
 
 function buildTournamentWheelSvg() {
   const n = TOURNAMENT_SLICES.length;
@@ -108,8 +117,10 @@ export function Tournament({
   const [spinPending, setSpinPending] = useState(false);
   const [banking, setBanking] = useState(false);
   const [rotation, setRotation] = useState(0);
+  const [spinQuip, setSpinQuip] = useState(T_SPINNING_QUIPS[0]!);
   const [lastSpinFeedback, setLastSpinFeedback] = useState<TournamentSpinResult | null>(null);
-  const timerRef = useRef<number | null>(null);
+  const wheelElRef = useRef<HTMLDivElement | null>(null);
+  const animRef = useRef<SpinAnimationHandle | null>(null);
 
   const wheelPaths = useMemo(() => buildTournamentWheelSvg(), []);
 
@@ -118,7 +129,7 @@ export function Tournament({
     const iv = window.setInterval(() => setNow(Date.now()), 1000);
     return () => {
       window.clearInterval(iv);
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      animRef.current?.cancel();
     };
   }, []);
 
@@ -175,48 +186,39 @@ export function Tournament({
     }
 
     setSpinPending(true);
+    setSpinQuip(T_SPINNING_QUIPS[Math.floor(Math.random() * T_SPINNING_QUIPS.length)]!);
     try {
       const res = await performTournamentSpin(entry.entrySeq);
       setSpinPending(false);
-
-      const n = TOURNAMENT_SLICES.length;
-      const sliceDeg = 360 / n;
-      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (!reduced) {
-        const turns = 4 + Math.floor(Math.random() * 2);
-        const currentMod = ((rotation % 360) + 360) % 360;
-        const targetMod = (((360 - (res.sliceIndex * sliceDeg + sliceDeg / 2)) % 360) + 360) % 360;
-        let delta = targetMod - currentMod;
-        if (delta < 0) delta += 360;
-        setRotation((r) => r + turns * 360 + delta);
-      }
-
       setSpinning(true);
-      let clicks = 0;
-      const clickTimer = reduced
-        ? null
-        : window.setInterval(() => {
-            clicks += 1;
-            tick(210 + (clicks % 4) * 55, 0.03);
-            if (clicks >= 10) window.clearInterval(clickTimer!);
-          }, 95);
 
-      timerRef.current = window.setTimeout(() => {
-        if (clickTimer !== null) window.clearInterval(clickTimer);
-        setSpinning(false);
-        setLastSpinFeedback(res);
-        void mutate(res.state, false);
+      animRef.current?.cancel();
+      animRef.current = startWheelSpinAnimation({
+        getElement: () => wheelElRef.current,
+        fromDeg: rotation,
+        sliceIndex: res.sliceIndex,
+        sliceCount: TOURNAMENT_SLICES.length,
+        durationMs: 1400,
+        turns: 4 + Math.floor(Math.random() * 2),
+        wedgeDeg: 360 / TOURNAMENT_SLICES.length,
+        onWedgeTick: (step) => tick(200 + (step % 4) * 50, 0.03),
+        onFinish: (finalMod) => {
+          setRotation(finalMod);
+          setSpinning(false);
+          setLastSpinFeedback(res);
+          void mutate(res.state, false);
 
-        if (res.outcomeKind === "blackout") {
-          tick(85, 0.35);
-          useGame.getState().pushToast("💥 БЛЕКАУТ КЗ!", res.note, "#d64545");
-        } else if (res.outcomeKind === "shield_saved") {
-          chord();
-          useGame.getState().pushToast("🛡️ Синя Ізолента втримала КЗ!", res.note, "#22d3ee");
-        } else {
-          chord();
-        }
-      }, reduced ? 20 : 1200);
+          if (res.outcomeKind === "blackout") {
+            tick(85, 0.35);
+            useGame.getState().pushToast("💥 БЛЕКАУТ КЗ!", res.note, "#d64545");
+          } else if (res.outcomeKind === "shield_saved") {
+            chord();
+            useGame.getState().pushToast("🛡️ Синя Ізолента втримала КЗ!", res.note, "#22d3ee");
+          } else {
+            chord();
+          }
+        },
+      });
     } catch (err) {
       setSpinPending(false);
       setSpinning(false);
@@ -420,37 +422,39 @@ export function Tournament({
                     className="absolute -top-2 left-1/2 z-20 -translate-x-1/2 border-x-[10px] border-t-[18px] border-x-transparent border-t-amber drop-shadow-[0_2px_6px_rgba(0,0,0,0.9)]"
                     aria-hidden
                   />
-                  <svg
-                    viewBox="0 0 300 300"
-                    className="size-full drop-shadow-[0_12px_30px_rgba(0,0,0,0.65)]"
-                    style={{
-                      transform: `rotate(${rotation}deg)`,
-                      transition: spinning ? "transform 1.15s cubic-bezier(0.15, 0.85, 0.25, 1)" : "none",
-                    }}
+                  <div
+                    ref={wheelElRef}
+                    className="size-full will-change-transform"
+                    style={{ transform: `translate3d(0, 0, 0) rotate(${rotation}deg)` }}
                   >
-                    <circle cx="150" cy="150" r="144" fill="#181410" stroke="#e8a317" strokeWidth="3" />
-                    {wheelPaths.map((s) => (
-                      <g key={s.id}>
-                        <path d={s.d} fill={s.color} fillOpacity={0.86} stroke="#141210" strokeWidth="2" />
-                        <text
-                          x={s.tx}
-                          y={s.ty}
-                          fill="#12100e"
-                          fontSize="10"
-                          fontWeight="900"
-                          textAnchor="middle"
-                          dominantBaseline="middle"
-                          transform={`rotate(${s.rot} ${s.tx} ${s.ty})`}
-                        >
-                          {s.wheelText}
-                        </text>
-                      </g>
-                    ))}
-                    <circle cx="150" cy="150" r="24" fill="#141210" stroke="#e8a317" strokeWidth="3" />
-                    <text x="150" y="152" fill="#e8a317" fontSize="13" fontWeight="900" textAnchor="middle" dominantBaseline="middle">
-                      LOL
-                    </text>
-                  </svg>
+                    <svg
+                      viewBox="0 0 300 300"
+                      className="size-full drop-shadow-[0_12px_30px_rgba(0,0,0,0.65)]"
+                    >
+                      <circle cx="150" cy="150" r="144" fill="#181410" stroke="#e8a317" strokeWidth="3" />
+                      {wheelPaths.map((s) => (
+                        <g key={s.id}>
+                          <path d={s.d} fill={s.color} fillOpacity={0.86} stroke="#141210" strokeWidth="2" />
+                          <text
+                            x={s.tx}
+                            y={s.ty}
+                            fill="#12100e"
+                            fontSize="9.5"
+                            fontWeight="900"
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            transform={`rotate(${s.rot} ${s.tx} ${s.ty})`}
+                          >
+                            {s.wheelText}
+                          </text>
+                        </g>
+                      ))}
+                      <circle cx="150" cy="150" r="24" fill="#141210" stroke="#e8a317" strokeWidth="3" />
+                      <text x="150" y="152" fill="#e8a317" fontSize="11.5" fontWeight="900" textAnchor="middle" dominantBaseline="middle">
+                        ⚡LOL
+                      </text>
+                    </svg>
+                  </div>
                 </div>
 
                 <div className="flex w-full flex-1 flex-col gap-2.5">
@@ -462,7 +466,7 @@ export function Tournament({
                     <p className="mt-1 text-[11px] text-muted">
                       {lastSpinFeedback?.note ??
                         entry.lastNote ??
-                        "Перша крутка з 0% ризиком КЗ завжди безпечна. Далі вирішує твоя жадібність!"}
+                        "Перша крутка з 0% ризиком КЗ завжди безпечна. Далі вирішує твоя жадібність (або сусід з бойлером)!"}
                     </p>
                   </div>
 
@@ -473,7 +477,7 @@ export function Tournament({
                     className="font-display min-h-13 w-full rounded-2xl bg-amber px-4 py-3 text-sm font-extrabold text-ink transition-transform active:scale-95 disabled:opacity-45"
                   >
                     {spinning || spinPending
-                      ? "⚡ НАПРУГА РОСТЕ…"
+                      ? spinQuip
                       : `⚡ Крутити на ризик (−1 заряд · ризик КЗ ${entry.overloadPct}%)`}
                   </button>
 

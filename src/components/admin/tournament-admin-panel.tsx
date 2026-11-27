@@ -8,7 +8,12 @@ import {
   type AdminTournamentOverview,
   type RelicBlueprint,
 } from "@/lib/admin";
-import { DEFAULT_TOP1_RELIC, DEFAULT_TOP2_RELIC, TOURNAMENT_CURRENCY_SHORT } from "@/lib/tournament";
+import {
+  DEFAULT_TOP1_RELIC,
+  DEFAULT_TOP2_RELIC,
+  RELIC_POWER_PRESETS,
+  TOURNAMENT_CURRENCY_SHORT,
+} from "@/lib/tournament";
 
 const EMOJI_PRESETS = ["👑", "🥈", "⚡", "🔋", "🕯️", "💎", "🛡️", "🔥", "🏆"];
 
@@ -384,7 +389,16 @@ export function TournamentAdminPanel({
             </label>
           </div>
 
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <div className="mt-4 rounded-xl border border-amber/30 bg-bg/90 px-3 py-2.5 text-[11px] text-muted">
+            <p className="font-display font-bold text-amber">Як працюють Ісекай-нагороди:</p>
+            <p className="mt-0.5 leading-relaxed">
+              Переможці Топ-1 і Топ-2 отримають ці унікальні трофеї у розділі{" "}
+              <strong className="text-fg">⚔️ ісекай → кодекс</strong> (окремі 2 слоти понад юнітів загону — вони не
+              впливають на баланс турнірів). Обирай готовий пресет сили нижче або підкручуй цифри вручну.
+            </p>
+          </div>
+
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
             <RelicBlueprintEditor place={1} value={rewardTop1} onChange={setRewardTop1} />
             <RelicBlueprintEditor place={2} value={rewardTop2} onChange={setRewardTop2} />
           </div>
@@ -507,7 +521,43 @@ function RelicBlueprintEditor({
         />
       </label>
 
-      <div className="mt-2.5 grid grid-cols-2 gap-2 font-mono text-[11px]">
+      <div className="mt-3">
+        <p className="text-[11px] font-semibold text-fg">Пресет сили нагороди:</p>
+        <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+          {RELIC_POWER_PRESETS.map((preset) => {
+            const active =
+              value.buff.gemsPct === preset.buff.gemsPct &&
+              value.buff.drainReductionPct === preset.buff.drainReductionPct &&
+              value.buff.onBonus === preset.buff.onBonus &&
+              value.buff.refundPct === preset.buff.refundPct;
+            const tone =
+              preset.id === "extreme"
+                ? active
+                  ? "border-off bg-off/20 text-off"
+                  : "border-off/35 bg-surface text-off/85 hover:border-off"
+                : preset.id === "high"
+                  ? active
+                    ? "border-amber bg-amber/20 text-amber"
+                    : "border-amber/35 bg-surface text-amber/85 hover:border-amber"
+                  : active
+                    ? "border-on bg-on/15 text-on"
+                    : "border-line bg-surface text-muted hover:text-fg";
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                title={preset.tag}
+                onClick={() => onChange({ ...value, buff: { ...preset.buff } })}
+                className={`rounded-lg border px-2 py-1.5 font-mono text-[10px] font-bold transition-colors ${tone}`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-[11px]">
         <label className="block">
           <span className="text-muted">кВт-геми +0..45%</span>
           <input
@@ -523,6 +573,7 @@ function RelicBlueprintEditor({
             }
             className="mt-0.5 w-full rounded-lg border border-line bg-surface px-2 py-1 text-xs text-fg"
           />
+          <span className="mt-0.5 block font-sans text-[10px] text-muted/80">більше гемів за кожну крутку</span>
         </label>
         <label className="block">
           <span className="text-muted">Розряд −0..25%</span>
@@ -542,6 +593,7 @@ function RelicBlueprintEditor({
             }
             className="mt-0.5 w-full rounded-lg border border-line bg-surface px-2 py-1 text-xs text-fg"
           />
+          <span className="mt-0.5 block font-sans text-[10px] text-muted/80">повільніше сідає павербанк</span>
         </label>
         <label className="block">
           <span className="text-muted">Світло +0..10%</span>
@@ -558,6 +610,7 @@ function RelicBlueprintEditor({
             }
             className="mt-0.5 w-full rounded-lg border border-line bg-surface px-2 py-1 text-xs text-fg"
           />
+          <span className="mt-0.5 block font-sans text-[10px] text-muted/80">дод. заряд, коли випадає світло</span>
         </label>
         <label className="block">
           <span className="text-muted">Повернення +0..20%</span>
@@ -574,6 +627,7 @@ function RelicBlueprintEditor({
             }
             className="mt-0.5 w-full rounded-lg border border-line bg-surface px-2 py-1 text-xs text-fg"
           />
+          <span className="mt-0.5 block font-sans text-[10px] text-muted/80">шанс на ×2 кВт-гемів за крутку</span>
         </label>
       </div>
     </div>
