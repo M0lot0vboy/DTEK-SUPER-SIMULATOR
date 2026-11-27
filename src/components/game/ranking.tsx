@@ -1,8 +1,9 @@
 import { useState } from "react";
 import useSWR from "swr";
-import { Crown, Radio, Star } from "lucide-react";
+import { Crown, Radio, ShieldCheck, Star } from "lucide-react";
 import { getLeaderboard, cleanName } from "@/lib/leaderboard";
-import { usePlayer, LEADERBOARD_KEY } from "@/lib/game/player";
+import { usePlayer, LEADERBOARD_KEY, getPublicPlayerId, performSetName } from "@/lib/game/player";
+import { useGame } from "@/lib/game/store";
 
 function ago(iso: string): string {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -14,19 +15,29 @@ function ago(iso: string): string {
 
 function NameForm() {
   const current = usePlayer((s) => s.name);
-  const setName = usePlayer((s) => s.setName);
   const [value, setValue] = useState(current);
+  const [saving, setSaving] = useState(false);
   const clean = cleanName(value);
   const valid = clean.length >= 2;
 
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!valid || saving || clean === current) return;
+    setSaving(true);
+    try {
+      const snap = await performSetName(clean);
+      setValue(snap.name);
+      useGame.getState().pushToast("Нікнейм збережено", `Ви у таблиці як ${snap.name}`, "#4fae63");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Не вдалося зберегти нікнейм";
+      useGame.getState().pushToast("Помилка", msg, "#d64545");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <form
-      className="flex gap-2"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (valid) setName(clean);
-      }}
-    >
+    <form className="flex gap-2" onSubmit={(e) => void submit(e)}>
       <label htmlFor="player-name" className="sr-only">
         Ваш нікнейм
       </label>
@@ -40,10 +51,10 @@ function NameForm() {
       />
       <button
         type="submit"
-        disabled={!valid || clean === current}
+        disabled={!valid || clean === current || saving}
         className="font-display shrink-0 rounded-xl bg-amber px-4 py-2 text-sm text-bg disabled:opacity-40"
       >
-        {current ? "змінити" : "увійти"}
+        {saving ? "..." : current ? "змінити" : "увійти"}
       </button>
     </form>
   );
@@ -52,18 +63,22 @@ function NameForm() {
 export function Ranking({ ready }: { ready: boolean }) {
   const myId = usePlayer((s) => s.id);
   const myName = usePlayer((s) => s.name);
+  const myPublicId = ready ? getPublicPlayerId(myId) : "";
   const { data, error, isLoading } = useSWR(LEADERBOARD_KEY, () => getLeaderboard(), {
     refreshInterval: 4000,
     revalidateOnFocus: true,
   });
 
   const rows = data ?? [];
-  const myIndex = rows.findIndex((r) => r.id === myId);
+  const myIndex = myPublicId ? rows.findIndex((r) => r.publicId === myPublicId) : -1;
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted">Жива таблиця всієї групи. Оновлюється кожні 4 секунди.</p>
+        <p className="flex items-center gap-1.5 text-xs text-muted">
+          <ShieldCheck className="size-3.5 shrink-0 text-on" aria-hidden />
+          Жива таблиця всієї групи · серверний античіт
+        </p>
         <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-on/15 px-2 py-0.5 text-[10px] text-on uppercase">
           <Radio className="size-3" aria-hidden />
           live
@@ -101,10 +116,10 @@ export function Ranking({ ready }: { ready: boolean }) {
         ) : (
           <ol>
             {rows.map((r, i) => {
-              const me = r.id === myId;
+              const me = Boolean(myPublicId) && r.publicId === myPublicId;
               return (
                 <li
-                  key={r.id}
+                  key={r.publicId}
                   className={`flex items-center justify-between gap-2 border-b border-line/50 px-4 py-2.5 last:border-b-0 ${
                     me ? "bg-amber/10" : ""
                   }`}
@@ -118,9 +133,15 @@ export function Ranking({ ready }: { ready: boolean }) {
                       {i === 0 ? <Crown className="size-4" aria-label="1" /> : i + 1}
                     </span>
                     <div className="min-w-0">
-                      <p className="truncate text-sm text-fg">
-                        {r.name}
-                        {me ? <span className="ml-1 text-[10px] text-amber">(ви)</span> : null}
+                      <p className="flex items-center gap-1 truncate text-sm text-fg">
+                        <span className="truncate">{r.name}</span>
+                        {r.verified ? (
+                          <ShieldCheck
+                            className="size-3.5 shrink-0 text-on"
+                            aria-label="Підтверджено сервером"
+                          />
+                        ) : null}
+                        {me ? <span className="shrink-0 text-[10px] text-amber">(ви)</span> : null}
                       </p>
                       <p className="text-[10px] text-muted">
                         ранг {r.level} · {ago(r.updatedAt)}

@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { constellationOf, scaledBuff, useGacha } from "@/lib/gacha/engine";
 import { EVAL_META, RARITY_COLOR, UNITS, type Rarity, type Unit } from "@/lib/gacha/pool";
 import { useGame } from "@/lib/game/store";
+import { performToggleEquip } from "@/lib/game/player";
 import { sfxClick } from "@/lib/gacha/audio";
 import { EvalBadge, Stars, UnitArt } from "./unit-art";
 
@@ -92,12 +93,23 @@ function InspectDialog({ unit, onClose }: { unit: Unit; onClose: () => void }) {
   const buff = scaledBuff(unit, c);
   const color = RARITY_COLOR[unit.rarity];
 
-  function equip() {
+  const [equipping, setEquipping] = useState(false);
+
+  async function equip() {
+    if (equipping) return;
     sfxClick();
-    const res = useGacha.getState().toggleEquip(unit.id);
-    const toast = useGame.getState().pushToast;
-    if (res === "full") toast("Загін повний", "Максимум 3 юніти. Когось доведеться принести в жертву.", "#d64545");
-    if (res === "equipped") toast("Юніт у загоні", `${unit.name} тепер посилює симулятор`, color);
+    setEquipping(true);
+    try {
+      const res = await performToggleEquip(unit.id);
+      const toast = useGame.getState().pushToast;
+      if (res.status === "full") toast("Загін повний", "Максимум 3 юніти. Когось доведеться принести в жертву.", "#d64545");
+      if (res.status === "equipped") toast("Юніт у загоні", `${unit.name} тепер посилює симулятор`, color);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Не вдалося змінити загін";
+      useGame.getState().pushToast("Загін", msg, "#d64545");
+    } finally {
+      setEquipping(false);
+    }
   }
 
   const buffLines = [
@@ -189,8 +201,9 @@ function InspectDialog({ unit, onClose }: { unit: Unit; onClose: () => void }) {
 
             <button
               type="button"
-              onClick={equip}
-              className={`font-display mt-4 min-h-12 w-full rounded-full text-sm font-extrabold ${
+              onClick={() => void equip()}
+              disabled={equipping}
+              className={`font-display mt-4 min-h-12 w-full rounded-full text-sm font-extrabold disabled:opacity-50 ${
                 equipped ? "border border-line bg-surface text-muted" : "bg-amber text-ink"
               }`}
             >

@@ -9,11 +9,13 @@ type Phase = "charge" | "surge" | "black" | "jumpscare" | "reveal";
 
 export function PullCutscene({
   results,
+  pulling = false,
   onClose,
   onAgain,
   onFlex,
 }: {
   results: PullOutcome[];
+  pulling?: boolean;
   onClose: () => void;
   onAgain: () => void;
   onFlex: () => void;
@@ -104,7 +106,7 @@ export function PullCutscene({
       {phase === "jumpscare" ? <Jumpscare onContinue={() => setPhase("reveal")} /> : null}
 
       {phase === "reveal" ? (
-        <Reveal results={results} onClose={onClose} onAgain={onAgain} onFlex={onFlex} />
+        <Reveal results={results} pulling={pulling} onClose={onClose} onAgain={onAgain} onFlex={onFlex} />
       ) : null}
 
       {phase !== "reveal" && phase !== "jumpscare" ? (
@@ -147,11 +149,13 @@ function Jumpscare({ onContinue }: { onContinue: () => void }) {
 
 function Reveal({
   results,
+  pulling,
   onClose,
   onAgain,
   onFlex,
 }: {
   results: PullOutcome[];
+  pulling: boolean;
   onClose: () => void;
   onAgain: () => void;
   onFlex: () => void;
@@ -173,7 +177,12 @@ function Reveal({
         <button type="button" onClick={onFlex} className="font-display flex min-h-11 items-center gap-1.5 rounded-full border border-amber/50 bg-ink px-5 text-sm font-bold text-amber">
           <Copy className="size-4" aria-hidden /> скопіювати флекс
         </button>
-        <button type="button" onClick={onAgain} className="font-display min-h-11 rounded-full bg-amber px-5 text-sm font-bold text-ink">
+        <button
+          type="button"
+          onClick={onAgain}
+          disabled={pulling}
+          className="font-display min-h-11 rounded-full bg-amber px-5 text-sm font-bold text-ink disabled:opacity-50"
+        >
           ще ×{results.length}
         </button>
         <button type="button" onClick={onClose} className="font-display min-h-11 rounded-full border border-line bg-surface px-5 text-sm font-bold text-muted">

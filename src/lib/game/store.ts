@@ -33,7 +33,8 @@ export type Store = GameState & {
   regenResin: () => void;
   spendResin: () => boolean;
   refundResin: () => void;
-  completeSpin: (outcome: Outcome, battery: number) => void;
+  completeSpin: (outcome: Outcome, battery: number, serverStats?: { spins: number; xp: number }) => void;
+  applyServerGame: (stats: { spins: number; xp: number }) => void;
   applyBatteryDelta: (delta: number) => void;
   unlock: (id: string) => void;
   pull: (count: number) => PullResult[];
@@ -159,13 +160,14 @@ export const useGame = create<Store>()(
         set((s) => ({ resin: Math.min(RESIN_MAX, s.resin + 1), resinAt: s.resin >= RESIN_MAX ? Date.now() : s.resinAt }));
       },
 
-      completeSpin: (outcome: Outcome, battery: number) => {
+      completeSpin: (outcome: Outcome, battery: number, serverStats?: { spins: number; xp: number }) => {
         const s = get();
         const hamster = s.pet === "hamster";
         const kwGain = KW_PER_OUTCOME[outcome] + (hamster ? 5 : 0);
         const xpGain = XP_PER_OUTCOME[outcome];
         const oldLevel = levelFromXp(s.xp);
-        const nextXp = s.xp + xpGain;
+        const nextXp = serverStats ? serverStats.xp : s.xp + xpGain;
+        const nextSpins = serverStats ? serverStats.spins : s.spins + 1;
         const nextLevel = levelFromXp(nextXp);
 
         const isOn = outcome === "on" || outcome === "blink";
@@ -192,7 +194,7 @@ export const useGame = create<Store>()(
         set({
           kw: s.kw + kwGain,
           xp: nextXp,
-          spins: s.spins + 1,
+          spins: nextSpins,
           off: s.off + (outcome === "off" ? 1 : 0),
           on: s.on + (isOn ? 1 : 0),
           generator: s.generator + (outcome === "generator" ? 1 : 0),
@@ -209,9 +211,13 @@ export const useGame = create<Store>()(
         if (bossesKilled > s.bossesKilled) {
           set((st) => ({ kw: st.kw + 500 }));
         }
-        if (s.spins + 1 >= 50 && s.spins < 50 && !s.achievements.includes("philosopher")) {
+        if (nextSpins >= 50 && s.spins < 50 && !s.achievements.includes("philosopher")) {
           get().unlock("philosopher");
         }
+      },
+
+      applyServerGame: (stats: { spins: number; xp: number }) => {
+        set({ spins: stats.spins, xp: stats.xp });
       },
 
       applyBatteryDelta: (delta: number) => {
