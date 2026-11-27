@@ -10,6 +10,7 @@ import {
   GEMS_PER_OUTCOME,
   HARD_PITY,
   MAX_LOADOUT,
+  MAX_RELIC_LOADOUT,
   PITY_4,
   PULL_COST,
   ROOK_BOOST_SPINS,
@@ -21,8 +22,10 @@ import {
   computeBuffs,
   constellationOf,
   fiveStarRate,
+  formatRelicStats,
   scaledBuff,
   type Buffs,
+  type CustomRelic,
   type GachaState,
   type PullOutcome,
   type ShopPack,
@@ -38,6 +41,7 @@ export {
   GEMS_PER_OUTCOME,
   HARD_PITY,
   MAX_LOADOUT,
+  MAX_RELIC_LOADOUT,
   PITY_4,
   PULL_COST,
   ROOK_BOOST_SPINS,
@@ -49,9 +53,10 @@ export {
   computeBuffs,
   constellationOf,
   fiveStarRate,
+  formatRelicStats,
   scaledBuff,
 };
-export type { Buffs, GachaState, PullOutcome, ShopPack };
+export type { Buffs, CustomRelic, GachaState, PullOutcome, ShopPack };
 
 export type ServerGachaSync = {
   gems: number;
@@ -63,6 +68,10 @@ export type ServerGachaSync = {
   pulls: number;
   copies: Record<string, number>;
   loadout: string[];
+  customItems?: CustomRelic[];
+  equippedRelics?: string[];
+  questsClaimed?: string[];
+  legacyGachaRefunded?: boolean;
   best5: string | null;
   best5Pity: number;
   lost5050Count: number;
@@ -73,6 +82,10 @@ export type ServerGachaSync = {
 };
 
 export type GachaStore = GachaState & {
+  customItems: CustomRelic[];
+  equippedRelics: string[];
+  questsClaimed: string[];
+  legacyGachaRefunded: boolean;
   setMuted: (muted: boolean) => void;
   setBadges: (on: boolean) => void;
   setLastBatch: (results: PullOutcome[]) => void;
@@ -80,7 +93,12 @@ export type GachaStore = GachaState & {
   resetGacha: () => void;
 };
 
-function initial(): GachaState {
+function initial(): GachaState & {
+  customItems: CustomRelic[];
+  equippedRelics: string[];
+  questsClaimed: string[];
+  legacyGachaRefunded: boolean;
+} {
   return {
     gems: PULL_COST * 10,
     shards: 0,
@@ -91,6 +109,10 @@ function initial(): GachaState {
     totalPulls: 0,
     copies: {},
     loadout: [],
+    customItems: [],
+    equippedRelics: [],
+    questsClaimed: [],
+    legacyGachaRefunded: false,
     fakeMoney: 0,
     lastBatch: [],
     best5: null,
@@ -129,6 +151,10 @@ export const useGacha = create<GachaStore>()(
           totalPulls: snap.pulls,
           copies: snap.copies,
           loadout: snap.loadout,
+          customItems: snap.customItems ?? [],
+          equippedRelics: snap.equippedRelics ?? [],
+          questsClaimed: snap.questsClaimed ?? [],
+          legacyGachaRefunded: Boolean(snap.legacyGachaRefunded),
           best5: snap.best5,
           best5Pity: snap.best5Pity,
           lost5050Count: snap.lost5050Count,
@@ -153,7 +179,7 @@ export const useGacha = create<GachaStore>()(
 
 export function loadoutBuffs(): Buffs {
   const s = useGacha.getState();
-  return computeBuffs(s.loadout, s.copies);
+  return computeBuffs(s.loadout, s.copies, s.customItems, s.equippedRelics);
 }
 
 export function flexText(state: GachaState): string {

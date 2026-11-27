@@ -103,6 +103,36 @@ export type GachaState = {
   seq: number;
 };
 
+export const MAX_RELIC_LOADOUT = 2;
+
+export type RelicBuff = {
+  drainReductionPct: number;
+  gemsPct: number;
+  onBonus: number;
+  refundPct: number;
+};
+
+export type CustomRelic = {
+  id: string;
+  name: string;
+  emoji: string;
+  lore: string;
+  place: 1 | 2;
+  tournamentId: number;
+  tournamentTitle: string;
+  awardedAt: string;
+  buff: RelicBuff;
+};
+
+export function formatRelicStats(r: CustomRelic): string[] {
+  const parts: string[] = [];
+  if (r.buff.gemsPct > 0) parts.push(`+${r.buff.gemsPct}% кВт-геми`);
+  if (r.buff.drainReductionPct > 0) parts.push(`−${r.buff.drainReductionPct}% розряд`);
+  if (r.buff.onBonus > 0) parts.push(`+${r.buff.onBonus}% світло`);
+  if (r.buff.refundPct > 0) parts.push(`+${r.buff.refundPct}% повернення`);
+  return parts;
+}
+
 export type Buffs = {
   drain: number;
   gems: number;
@@ -111,6 +141,67 @@ export type Buffs = {
   rook: boolean;
   queue: boolean;
 };
+
+function clampIntNum(value: unknown, min: number, max: number): number {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+export function clampRelicBuff(raw: unknown): RelicBuff {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    drainReductionPct: clampIntNum(r.drainReductionPct, 0, 25),
+    gemsPct: clampIntNum(r.gemsPct, 0, 45),
+    onBonus: clampIntNum(r.onBonus, 0, 10),
+    refundPct: clampIntNum(r.refundPct, 0, 20),
+  };
+}
+
+export function sanitizeCustomItems(raw: unknown): CustomRelic[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CustomRelic[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const r = item as Record<string, unknown>;
+    const id = String(r.id ?? "").trim().slice(0, 64);
+    const name = String(r.name ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
+    if (!id || !name || seen.has(id)) continue;
+    seen.add(id);
+    const emojiRaw = String(r.emoji ?? "🏆").trim().slice(0, 12);
+    const lore = String(r.lore ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+    const place = Number(r.place) === 2 ? 2 : 1;
+    const tournamentId = Math.max(0, Math.floor(Number(r.tournamentId) || 0));
+    const tournamentTitle = String(r.tournamentTitle ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+    const awardedAt = typeof r.awardedAt === "string" ? r.awardedAt.slice(0, 40) : "";
+    out.push({
+      id,
+      name,
+      emoji: emojiRaw || "🏆",
+      lore,
+      place,
+      tournamentId,
+      tournamentTitle,
+      awardedAt,
+      buff: clampRelicBuff(r.buff),
+    });
+    if (out.length >= 100) break;
+  }
+  return out;
+}
+
+export function sanitizeEquippedRelics(raw: unknown, customItems: CustomRelic[]): string[] {
+  if (!Array.isArray(raw)) return [];
+  const owned = new Set(customItems.map((item) => item.id));
+  const out: string[] = [];
+  for (const id of raw) {
+    if (typeof id !== "string" || !owned.has(id) || out.includes(id)) continue;
+    out.push(id);
+    if (out.length >= MAX_RELIC_LOADOUT) break;
+  }
+  return out;
+}
 
 export function fiveStarRate(pity: number): number {
   if (pity >= HARD_PITY) return 1;
@@ -133,7 +224,12 @@ export function scaledBuff(unit: Unit, constellation: number) {
   };
 }
 
-export function computeBuffs(loadout: string[], copies: Record<string, number>): Buffs {
+export function computeBuffs(
+  loadout: string[],
+  copies: Record<string, number>,
+  customItems: CustomRelic[] = [],
+  equippedRelics: string[] = [],
+): Buffs {
   const out: Buffs = { drain: 1, gems: 0, onBonus: 0, refund: 0, rook: false, queue: false };
   for (const id of loadout) {
     const unit = UNIT_BY_ID[id];
@@ -146,8 +242,17 @@ export function computeBuffs(loadout: string[], copies: Record<string, number>):
     if (id === "rook") out.rook = true;
     if (id === "queue") out.queue = true;
   }
+  const byId = new Map(customItems.map((c) => [c.id, c]));
+  for (const relicId of sanitizeEquippedRelics(equippedRelics, customItems)) {
+    const relic = byId.get(relicId);
+    if (!relic) continue;
+    out.drain *= 1 - relic.buff.drainReductionPct / 100;
+    out.gems += relic.buff.gemsPct / 100;
+    out.onBonus += relic.buff.onBonus;
+    out.refund += relic.buff.refundPct / 100;
+  }
   out.drain = Math.max(0.2, out.drain);
-  out.refund = Math.min(0.5, out.refund);
+  out.refund = Math.min(0.65, out.refund);
   return out;
 }
 

@@ -13,10 +13,11 @@ import {
 } from "@/lib/game/data";
 import { useGame, batteryDrain, eventChance, migrateLegacy } from "@/lib/game/store";
 import { chord, tick } from "@/lib/game/audio";
+import useSWR from "swr";
 import { Hud } from "@/components/game/hud";
-import { Gacha } from "@/components/game/gacha";
 import { Quests } from "@/components/game/quests";
 import { Ranking } from "@/components/game/ranking";
+import { Tournament } from "@/components/game/tournament";
 import { Toasts } from "@/components/game/toasts";
 import { DailyModal } from "@/components/game/daily-modal";
 import { AccountModal } from "@/components/game/account-modal";
@@ -24,7 +25,9 @@ import { GachaPanel } from "@/components/gacha/gacha-panel";
 import { loadoutBuffs, useGacha } from "@/lib/gacha/engine";
 import {
   LEADERBOARD_KEY,
+  TOURNAMENT_KEY,
   applyServerSnapshot,
+  fetchTournamentOverview,
   performClearBlackout,
   performSpin,
   useBanState,
@@ -129,7 +132,7 @@ function dailyPick(list: string[]): string {
   return list[Math.abs(h) % list.length]!;
 }
 
-type Tab = "isekai" | "gacha" | "quests" | "ranking";
+type Tab = "isekai" | "tournament" | "quests" | "ranking";
 
 function Home() {
   const [rotation, setRotation] = useState(0);
@@ -157,10 +160,17 @@ function Home() {
   const [doomClicks, setDoomClicks] = useState(0);
   const [confetti, setConfetti] = useState(false);
   const [event, setEvent] = useState<(typeof EVENTS)[number] | null>(null);
-  const [tab, setTab] = useState<Tab>("gacha");
+  const [tab, setTab] = useState<Tab>("isekai");
   const [spinEvent, setSpinEvent] = useState<ActiveSpinEvent | null>(null);
   const [spinMs, setSpinMs] = useState(SPIN_DURATION_NORMAL_MS);
   const timer = useRef<number | null>(null);
+
+  const { data: tournamentState } = useSWR(
+    ready ? TOURNAMENT_KEY : null,
+    fetchTournamentOverview,
+    { refreshInterval: 15000, revalidateOnFocus: false },
+  );
+  const tournamentLive = Boolean(tournamentState?.active);
 
   const pet = useGame((s) => s.pet);
   const battery = useGame((s) => s.battery);
@@ -684,7 +694,7 @@ function Home() {
         {(
           [
             ["isekai", "⚔️ ісекай"],
-            ["gacha", "🎰 гача"],
+            ["tournament", "⚡ турнір"],
             ["quests", "📜 квести"],
             ["ranking", "🏆 рейтинг"],
           ] as const
@@ -703,13 +713,21 @@ function Home() {
                 !
               </span>
             ) : null}
+            {id === "tournament" && ready && tournamentLive ? (
+              <span
+                className="font-display absolute -top-1.5 -right-1 rounded-full border-2 border-bg bg-off px-1.5 py-0.2 text-[9px] font-extrabold text-fg animate-pulse"
+                aria-label="Турнір активний"
+              >
+                LIVE
+              </span>
+            ) : null}
           </button>
         ))}
       </nav>
 
       <section className="relative mt-3">
         {tab === "isekai" ? <GachaPanel ready={ready} /> : null}
-        {tab === "gacha" ? <Gacha ready={ready} /> : null}
+        {tab === "tournament" ? <Tournament ready={ready} onOpenAccount={() => setShowAccount(true)} /> : null}
         {tab === "quests" ? <Quests ready={ready} /> : null}
         {tab === "ranking" ? <Ranking ready={ready} onOpenAccount={() => setShowAccount(true)} /> : null}
       </section>

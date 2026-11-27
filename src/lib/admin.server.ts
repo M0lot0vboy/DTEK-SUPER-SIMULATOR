@@ -16,9 +16,25 @@ import {
   type BanType,
   type DbPlayerRow,
 } from "./anticheat.server.ts";
-import { PULL_COST, computeBuffs, type Buffs } from "./gacha/rules.ts";
+import { PULL_COST, computeBuffs, type Buffs, type CustomRelic } from "./gacha/rules.ts";
 import { titleFor, xpForLevel } from "./game/data.ts";
 import { SEASON } from "./game/season.ts";
+import {
+  cancelAdminTournament,
+  createAdminTournament,
+  disqualifyAdminTournamentEntry,
+  finishAdminTournament,
+  getAdminTournamentOverview,
+} from "./tournament.server.ts";
+import type { AdminTournamentOverview } from "./tournament.ts";
+
+export {
+  cancelAdminTournament,
+  createAdminTournament,
+  disqualifyAdminTournamentEntry,
+  finishAdminTournament,
+};
+export type { AdminTournamentOverview };
 
 export const ADMIN_COOKIE_NAME = "dtek_admin_session";
 export const ADMIN_SESSION_MAX_AGE = 12 * 60 * 60; // 12 hours
@@ -119,6 +135,7 @@ export type AdminDashboardData = {
   bans: AdminBanRecord[];
   anticheatLogs: AdminViolationRecord[];
   auditLogs: AdminAuditRecord[];
+  tournament: AdminTournamentOverview;
 };
 
 export type AdminSpectateData = {
@@ -145,6 +162,11 @@ export type AdminSpectateData = {
   guaranteed: boolean;
   copies: Record<string, number>;
   loadout: string[];
+  customItems: CustomRelic[];
+  equippedRelics: string[];
+  legacyGachaRefunded: boolean;
+  legacyRefundGems: number;
+  legacyRefundTickets: number;
   buffs: Buffs;
   best5: string | null;
   best5Pity: number;
@@ -641,6 +663,8 @@ export async function getAdminDashboard(
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
   });
 
+  const tournament = await getAdminTournamentOverview(sql);
+
   return {
     adminUser,
     summary: {
@@ -668,6 +692,7 @@ export async function getAdminDashboard(
       detail: formatDetail(a.detail),
       createdAt: new Date(a.created_at).toISOString(),
     })),
+    tournament,
   };
 }
 
@@ -685,7 +710,7 @@ export async function spectateAdminPlayer(sql: Sql, playerId: string): Promise<A
   if (!row) throw new Error("Гравця не знайдено");
 
   const snap = snapshotFromRow(row);
-  const buffs = computeBuffs(snap.loadout, snap.copies);
+  const buffs = computeBuffs(snap.loadout, snap.copies, snap.customItems, snap.equippedRelics);
   const updatedMs = new Date(row.updated_at).getTime();
   const online = Number.isFinite(updatedMs) && Date.now() - updatedMs <= ONLINE_WINDOW_MS;
 
@@ -751,6 +776,11 @@ export async function spectateAdminPlayer(sql: Sql, playerId: string): Promise<A
     guaranteed: snap.guaranteed,
     copies: snap.copies,
     loadout: snap.loadout,
+    customItems: snap.customItems,
+    equippedRelics: snap.equippedRelics,
+    legacyGachaRefunded: snap.legacyGachaRefunded,
+    legacyRefundGems: snap.legacyRefundGems,
+    legacyRefundTickets: snap.legacyRefundTickets,
     buffs,
     best5: snap.best5,
     best5Pity: snap.best5Pity,
@@ -806,6 +836,9 @@ export async function demonetizeAdminPlayer(
       guaranteed = false,
       copies = '{}'::jsonb,
       loadout = '[]'::jsonb,
+      custom_items = '[]'::jsonb,
+      equipped_relics = '[]'::jsonb,
+      quests_claimed = '[]'::jsonb,
       best5 = null,
       best5_pity = 0,
       lost_5050_count = 0,

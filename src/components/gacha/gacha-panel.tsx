@@ -3,10 +3,12 @@ import { Bell, BellOff, Copy, Siren, Volume2, VolumeX } from "lucide-react";
 import {
   AID_AMOUNT,
   MAX_LOADOUT,
+  MAX_RELIC_LOADOUT,
   PULL_COST,
   computeBuffs,
   constellationOf,
   flexText,
+  formatRelicStats,
   useGacha,
   type PullOutcome,
 } from "@/lib/gacha/engine";
@@ -17,6 +19,7 @@ import { performClaimAid, performPull, performSacrificeRook } from "@/lib/game/p
 import { PityBar } from "./pity-bar";
 import { PullCutscene } from "./pull-cutscene";
 import { Codex } from "./codex";
+import { RelicShowcase } from "./relic-showcase";
 import { Shop } from "./shop";
 import { EvalBadge, Stars, UnitArt } from "./unit-art";
 
@@ -283,7 +286,12 @@ export function GachaPanel({ ready }: { ready: boolean }) {
             </details>
           </div>
         ) : null}
-        {view === "codex" ? <Codex /> : null}
+        {view === "codex" ? (
+          <div className="space-y-4">
+            <RelicShowcase ready={ready} />
+            <Codex />
+          </div>
+        ) : null}
         {view === "shop" ? <Shop /> : null}
       </div>
 
@@ -315,12 +323,15 @@ function Currency({ label, value, color }: { label: string; value: string; color
 function Loadout({ ready, now }: { ready: boolean; now: number }) {
   const loadout = useGacha((s) => s.loadout);
   const copies = useGacha((s) => s.copies);
+  const customItems = useGacha((s) => s.customItems);
+  const equippedRelics = useGacha((s) => s.equippedRelics);
   const rookReadyAt = useGacha((s) => s.rookReadyAt);
   const boostSpins = useGacha((s) => s.boostSpins);
   const [sacrificing, setSacrificing] = useState(false);
-  const buffs = computeBuffs(loadout, copies);
+  const buffs = computeBuffs(loadout, copies, customItems, equippedRelics);
   const slots = Array.from({ length: MAX_LOADOUT }, (_, i) => (ready ? loadout[i] : undefined));
   const rookReady = ready && buffs.rook && now >= rookReadyAt;
+  const activeRelics = ready ? customItems.filter((r) => equippedRelics.includes(r.id)) : [];
 
   async function sacrifice() {
     if (sacrificing || !rookReady) return;
@@ -342,7 +353,10 @@ function Loadout({ ready, now }: { ready: boolean; now: number }) {
   return (
     <section className="rounded-xl border border-line bg-surface p-3" aria-label="Загін">
       <div className="flex items-center justify-between">
-        <p className="font-display text-xs tracking-widest text-muted uppercase">Загін · {ready ? loadout.length : 0}/{MAX_LOADOUT}</p>
+        <p className="font-display text-xs tracking-widest text-muted uppercase">
+          Загін · {ready ? loadout.length : 0}/{MAX_LOADOUT}
+          {ready && customItems.length > 0 ? ` · 🏆 ${activeRelics.length}/${MAX_RELIC_LOADOUT}` : ""}
+        </p>
         {ready && boostSpins > 0 ? <p className="font-display text-[11px] text-amber">×3 геми ще {boostSpins} круток</p> : null}
       </div>
       <ul className="mt-2 grid grid-cols-3 gap-2">
@@ -368,7 +382,21 @@ function Loadout({ ready, now }: { ready: boolean; now: number }) {
           );
         })}
       </ul>
-      {ready && loadout.length ? (
+      {activeRelics.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {activeRelics.map((relic) => (
+            <div
+              key={relic.id}
+              className="flex items-center gap-1.5 rounded-lg border border-amber/45 bg-ink px-2 py-1 text-[10px]"
+            >
+              <span>{relic.emoji}</span>
+              <span className="font-display font-semibold text-amber">{relic.name}</span>
+              <span className="text-muted">{formatRelicStats(relic).join(" · ")}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {ready && (loadout.length > 0 || activeRelics.length > 0) ? (
         <p className="mt-2 text-[11px] text-muted">
           Розряд {buffs.drain < 1 ? "−" : "+"}
           {Math.round(Math.abs(1 - buffs.drain) * 100)}% · геми +{Math.round(buffs.gems * 100)}% · світло +{buffs.onBonus}% · повернення{" "}

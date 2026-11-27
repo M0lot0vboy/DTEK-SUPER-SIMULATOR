@@ -6,9 +6,11 @@ import type {
   AdminDashboardData,
   AdminPlayerSummary,
   AdminSpectateData,
+  AdminTournamentOverview,
   AdminViolationRecord,
 } from "@/lib/admin.server";
 import type { BanType } from "@/lib/anticheat.server";
+import type { AdminTournamentParticipant, RelicBlueprint, TournamentInfo } from "@/lib/tournament";
 
 export type {
   AdminAuditRecord,
@@ -17,8 +19,12 @@ export type {
   AdminDashboardData,
   AdminPlayerSummary,
   AdminSpectateData,
+  AdminTournamentOverview,
+  AdminTournamentParticipant,
   AdminViolationRecord,
   BanType,
+  RelicBlueprint,
+  TournamentInfo,
 };
 
 export type AdminStatusResponse = AdminConfigStatus & {
@@ -214,3 +220,89 @@ export const unbanEntry = createServerFn({ method: "POST" })
     const adminUser = await admin.requireAdminSession(sql, srv.getCookie(admin.ADMIN_COOKIE_NAME));
     return admin.unbanAdminEntry(sql, adminUser, data);
   });
+
+export const launchTournament = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const d = (data ?? {}) as Record<string, unknown>;
+    return {
+      title: String(d.title ?? "").trim().slice(0, 64),
+      description: String(d.description ?? "").trim().slice(0, 200),
+      durationMinutes: Number(d.durationMinutes ?? 60),
+      startingCharges: Number(d.startingCharges ?? 12),
+      maxCharges: Number(d.maxCharges ?? 20),
+      regenMinutes: Number(d.regenMinutes ?? 30),
+      rewardTop1: d.rewardTop1,
+      rewardTop2: d.rewardTop2,
+    };
+  })
+  .handler(async ({ data }): Promise<AdminTournamentOverview> => {
+    const [{ getSql }, admin, srv] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/admin.server"),
+      import("@tanstack/react-start/server"),
+    ]);
+    const sql = await getSql();
+    const adminUser = await admin.requireAdminSession(sql, srv.getCookie(admin.ADMIN_COOKIE_NAME));
+    return admin.createAdminTournament(sql, adminUser, data);
+  });
+
+export const finishTournament = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const d = (data ?? {}) as Record<string, unknown>;
+    const tournamentId = Math.floor(Number(d.tournamentId));
+    if (!Number.isInteger(tournamentId) || tournamentId <= 0) throw new Error("Невірний ID турніру");
+    return { tournamentId };
+  })
+  .handler(async ({ data }): Promise<AdminTournamentOverview> => {
+    const [{ getSql }, admin, srv] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/admin.server"),
+      import("@tanstack/react-start/server"),
+    ]);
+    const sql = await getSql();
+    const adminUser = await admin.requireAdminSession(sql, srv.getCookie(admin.ADMIN_COOKIE_NAME));
+    return admin.finishAdminTournament(sql, adminUser, data.tournamentId);
+  });
+
+export const cancelTournament = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const d = (data ?? {}) as Record<string, unknown>;
+    const tournamentId = Math.floor(Number(d.tournamentId));
+    if (!Number.isInteger(tournamentId) || tournamentId <= 0) throw new Error("Невірний ID турніру");
+    return { tournamentId };
+  })
+  .handler(async ({ data }): Promise<AdminTournamentOverview> => {
+    const [{ getSql }, admin, srv] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/admin.server"),
+      import("@tanstack/react-start/server"),
+    ]);
+    const sql = await getSql();
+    const adminUser = await admin.requireAdminSession(sql, srv.getCookie(admin.ADMIN_COOKIE_NAME));
+    return admin.cancelAdminTournament(sql, adminUser, data.tournamentId);
+  });
+
+export const disqualifyTournamentEntry = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const d = (data ?? {}) as Record<string, unknown>;
+    const tournamentId = Math.floor(Number(d.tournamentId));
+    const playerId = String(d.playerId ?? "");
+    if (!Number.isInteger(tournamentId) || tournamentId <= 0) throw new Error("Невірний ID турніру");
+    if (!ID_RE.test(playerId)) throw new Error("Невірний ID гравця");
+    return {
+      tournamentId,
+      playerId,
+      reason: typeof d.reason === "string" ? d.reason.slice(0, 180) : undefined,
+    };
+  })
+  .handler(async ({ data }): Promise<AdminTournamentOverview> => {
+    const [{ getSql }, admin, srv] = await Promise.all([
+      import("@/lib/db"),
+      import("@/lib/admin.server"),
+      import("@tanstack/react-start/server"),
+    ]);
+    const sql = await getSql();
+    const adminUser = await admin.requireAdminSession(sql, srv.getCookie(admin.ADMIN_COOKIE_NAME));
+    return admin.disqualifyAdminTournamentEntry(sql, adminUser, data);
+  });
+

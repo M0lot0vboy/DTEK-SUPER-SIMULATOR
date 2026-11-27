@@ -47,6 +47,7 @@ async function createTestSql(): Promise<Sql> {
     "0004_anticheat.sql",
     "0005_admin_and_bans.sql",
     "0006_spin_turbo_and_accounts.sql",
+    "0007_tournaments_and_gacha_refund.sql",
   ]) {
     await pg.exec(readFileSync(join(ROOT, "migrations", file), "utf8"));
   }

@@ -7,27 +7,38 @@ import { useGame } from "@/lib/game/store";
 import { useGacha } from "@/lib/gacha/engine";
 import { collectTelemetry, persistBanMarker } from "@/lib/fingerprint";
 import {
+  bankTournamentServer,
   checkAccess,
   claimAidServer,
+  claimLegacyRefundServer,
+  claimQuestRewardServer,
   clearBlackoutServer,
   exchangeShardsServer,
+  fetchTournamentState,
   getSeason,
   initSession,
+  joinTournamentServer,
   loginAccount,
   logoutAccount,
   pullBanner,
   registerAccount,
   sacrificeRookServer,
   setPlayerName,
+  spinTournamentServer,
   spinWheel,
   toggleEquipServer,
+  toggleRelicServer,
   type AccountAuthResult,
   type ActiveBanInfo,
   type BanType,
+  type LegacyRefundResult,
   type LegacySeedInput,
   type PlayerSnapshot,
   type PullServerResult,
+  type QuestClaimResult,
   type SpinExecutionResult,
+  type TournamentSpinResult,
+  type TournamentStateResponse,
 } from "@/lib/leaderboard";
 import { publicPlayerId } from "@/lib/crypto-hash";
 
@@ -180,6 +191,7 @@ export const usePlayer = create<PlayerStore>()(
 );
 
 export const LEADERBOARD_KEY = "leaderboard";
+export const TOURNAMENT_KEY = "tournament";
 
 export function getPublicPlayerId(id: string): string {
   return publicPlayerId(id);
@@ -248,6 +260,7 @@ export function applyServerSnapshot(
 
 let sessionSynced = false;
 let inflightSession: Promise<PlayerSnapshot | null> | null = null;
+let legacyRefundAttempted = false;
 
 export async function refreshBanAccess(): Promise<ActiveBanInfo | null> {
   if (typeof window === "undefined") return null;
@@ -293,6 +306,10 @@ export async function ensureSessionSynced(force = false): Promise<PlayerSnapshot
       });
       sessionSynced = true;
       applyServerSnapshot(snap);
+      if (!snap.legacyGachaRefunded && !legacyRefundAttempted) {
+        legacyRefundAttempted = true;
+        void performClaimLegacyRefund().catch(() => null);
+      }
       return snap;
     } catch (err) {
       rethrowAfterBanCheck(err);
@@ -531,7 +548,11 @@ export async function performRegisterAccount(username: string, password: string)
       registered: true,
     });
     applyServerSnapshot(res.state);
+    if (!res.state.legacyGachaRefunded) {
+      void performClaimLegacyRefund().catch(() => null);
+    }
     void mutate(LEADERBOARD_KEY);
+    void mutate(TOURNAMENT_KEY);
     return res;
   } catch (err) {
     return rethrowAfterBanCheck(err);
@@ -551,6 +572,7 @@ export async function performLoginAccount(username: string, password: string): P
       },
     });
     sessionSynced = true;
+    legacyRefundAttempted = false;
     if (res.id !== prevId) {
       useGame.getState().resetForAccountSwitch({ spins: res.state.spins, xp: res.state.xp });
     }
@@ -563,7 +585,11 @@ export async function performLoginAccount(username: string, password: string): P
       lastResetAt: res.state.demonetizedAt,
     });
     applyServerSnapshot(res.state);
+    if (!res.state.legacyGachaRefunded) {
+      void performClaimLegacyRefund().catch(() => null);
+    }
     void mutate(LEADERBOARD_KEY);
+    void mutate(TOURNAMENT_KEY);
     return res;
   } catch (err) {
     return rethrowAfterBanCheck(err);
@@ -580,6 +606,7 @@ export async function performLogoutAccount(): Promise<void> {
     // Clearing local session still logs this browser out safely even if offline.
   }
   sessionSynced = false;
+  legacyRefundAttempted = false;
   usePlayer.setState({
     id: newId(),
     secret: newSecret(),
@@ -591,4 +618,125 @@ export async function performLogoutAccount(): Promise<void> {
   useGacha.getState().resetGacha();
   useGame.getState().resetAllProgress({ silentToast: true });
   void mutate(LEADERBOARD_KEY);
+  void mutate(TOURNAMENT_KEY);
 }
+
+export async function performClaimLegacyRefund(): Promise<LegacyRefundResult> {
+  const creds = getCredentials();
+  const telemetry = await collectTelemetry();
+  const legacyPulls = Math.max(0, Math.floor(Number(useGame.getState().pulls) || 0));
+  try {
+    const res = await claimLegacyRefundServer({
+      data: {
+        season: creds.season,
+        id: creds.id,
+        secret: creds.secret,
+        legacyPulls,
+        telemetry,
+      },
+    });
+    sessionSynced = true;
+    applyServerSnapshot(res.state);
+    if (res.refundedNow) {
+      useGame.setState({ pulls: 0, pity4: 0, pity5: 0, inv: {}, kw: 0 });
+      useGame
+        .getState()
+        .pushToast(
+          "🎰 Стару гачу повернуто в ⚔️ Ісекай!",
+          `Нараховано +${res.gemsAdded} кВт-гемів та +${res.ticketsAdded} талонів.`,
+          "#e8a317",
+        );
+    }
+    return res;
+  } catch (err) {
+    return rethrowAfterBanCheck(err);
+  }
+}
+
+export async function performToggleRelic(
+  relicId: string,
+): Promise<{ status: "equipped" | "removed" | "full" | "locked"; state: PlayerSnapshot }> {
+  const res = await runWithRetry((creds, seq, telemetry) =>
+    toggleRelicServer({
+      data: { season: creds.season, id: creds.id, secret: creds.secret, seq, relicId, telemetry },
+    }),
+  );
+  sessionSynced = true;
+  applyServerSnapshot(res.state);
+  return res;
+}
+
+export async function performClaimQuestReward(
+  kind: "daily" | "bp" | "raid",
+  targetId: string,
+): Promise<QuestClaimResult> {
+  const res = await runWithRetry((creds, seq, telemetry) =>
+    claimQuestRewardServer({
+      data: { season: creds.season, id: creds.id, secret: creds.secret, seq, kind, targetId, telemetry },
+    }),
+  );
+  sessionSynced = true;
+  applyServerSnapshot(res.state);
+  return res;
+}
+
+export async function fetchTournamentOverview(): Promise<TournamentStateResponse> {
+  const p = usePlayer.getState();
+  const telemetry = await collectTelemetry();
+  try {
+    const hasAuth = p.registered && SECRET_RE.test(p.secret);
+    return await fetchTournamentState({
+      data: {
+        ...(hasAuth ? { id: p.id, secret: p.secret, season: SEASON } : {}),
+        telemetry,
+      },
+    });
+  } catch (err) {
+    return rethrowAfterBanCheck(err);
+  }
+}
+
+export async function performJoinTournament(): Promise<TournamentStateResponse> {
+  const creds = getCredentials();
+  const telemetry = await collectTelemetry();
+  try {
+    const res = await joinTournamentServer({
+      data: { season: creds.season, id: creds.id, secret: creds.secret, telemetry },
+    });
+    void mutate(TOURNAMENT_KEY, res, false);
+    return res;
+  } catch (err) {
+    return rethrowAfterBanCheck(err);
+  }
+}
+
+export async function performTournamentSpin(entrySeq: number): Promise<TournamentSpinResult> {
+  const creds = getCredentials();
+  const telemetry = await collectTelemetry();
+  try {
+    const res = await spinTournamentServer({
+      data: { season: creds.season, id: creds.id, secret: creds.secret, entrySeq, telemetry },
+    });
+    void mutate(TOURNAMENT_KEY, res.state, false);
+    return res;
+  } catch (err) {
+    return rethrowAfterBanCheck(err);
+  }
+}
+
+export async function performTournamentBank(
+  entrySeq: number,
+): Promise<{ bankedAdded: number; state: TournamentStateResponse }> {
+  const creds = getCredentials();
+  const telemetry = await collectTelemetry();
+  try {
+    const res = await bankTournamentServer({
+      data: { season: creds.season, id: creds.id, secret: creds.secret, entrySeq, telemetry },
+    });
+    void mutate(TOURNAMENT_KEY, res.state, false);
+    return res;
+  } catch (err) {
+    return rethrowAfterBanCheck(err);
+  }
+}
+

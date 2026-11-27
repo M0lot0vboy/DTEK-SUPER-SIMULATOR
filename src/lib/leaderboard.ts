@@ -5,22 +5,29 @@ import type {
   ActiveBanInfo,
   BanType,
   LeaderRow,
+  LegacyRefundResult,
   LegacySeedInput,
   PlayerSnapshot,
   PullServerResult,
+  QuestClaimResult,
   SpinExecutionResult,
   TelemetryContext,
 } from "@/lib/anticheat.server";
+import type { TournamentSpinResult, TournamentStateResponse } from "@/lib/tournament";
 
 export type {
   AccountAuthResult,
   ActiveBanInfo,
   BanType,
   LeaderRow,
+  LegacyRefundResult,
   LegacySeedInput,
   PlayerSnapshot,
   PullServerResult,
+  QuestClaimResult,
   SpinExecutionResult,
+  TournamentSpinResult,
+  TournamentStateResponse,
 };
 
 const BAN_COOKIE_NAME = "dtek_ban_marker";
@@ -395,3 +402,137 @@ export const logoutAccount = createServerFn({ method: "POST" })
     const sql = await getSql();
     return anticheat.logoutPlayerAccount(sql, data);
   });
+
+export const claimLegacyRefundServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return {
+      ...auth,
+      legacyPulls: Math.max(0, Math.floor(Number(d.legacyPulls) || 0)),
+      telemetry: cleanClientTelemetry(d.telemetry),
+    };
+  })
+  .handler(async ({ data }): Promise<LegacyRefundResult> => {
+    return runWithBanCookie(
+      (sql, anticheat, telemetry) => anticheat.executeClaimLegacyGachaRefund(sql, { ...data, telemetry }),
+      data.telemetry,
+    );
+  });
+
+export const toggleRelicServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    const relicId = String(d.relicId ?? "").trim().slice(0, 64);
+    if (!relicId) throw new Error("Невідома реліквія");
+    return {
+      ...auth,
+      seq: cleanSeq(d.seq),
+      relicId,
+      telemetry: cleanClientTelemetry(d.telemetry),
+    };
+  })
+  .handler(async ({ data }): Promise<{ status: "equipped" | "removed" | "full" | "locked"; state: PlayerSnapshot }> => {
+    return runWithBanCookie(
+      (sql, anticheat, telemetry) => anticheat.executeServerToggleRelic(sql, { ...data, telemetry }),
+      data.telemetry,
+    );
+  });
+
+export const claimQuestRewardServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    const kind: "daily" | "bp" | "raid" | null =
+      d.kind === "daily" || d.kind === "bp" || d.kind === "raid" ? d.kind : null;
+    if (!kind) throw new Error("Невідомий тип квесту");
+    const targetId = String(d.targetId ?? "").trim().slice(0, 32);
+    if (!targetId) throw new Error("Невідомий квест");
+    return {
+      ...auth,
+      seq: cleanSeq(d.seq),
+      kind,
+      targetId,
+      telemetry: cleanClientTelemetry(d.telemetry),
+    };
+  })
+  .handler(async ({ data }): Promise<QuestClaimResult> => {
+    return runWithBanCookie(
+      (sql, anticheat, telemetry) => anticheat.executeServerClaimQuest(sql, { ...data, telemetry }),
+      data.telemetry,
+    );
+  });
+
+export const fetchTournamentState = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const d = (data ?? {}) as Record<string, unknown>;
+    const id = typeof d.id === "string" && ID_RE.test(d.id) ? d.id : undefined;
+    const secret = typeof d.secret === "string" && SECRET_RE.test(d.secret) ? d.secret : undefined;
+    const season = Number(d.season) === SEASON ? SEASON : undefined;
+    return {
+      id,
+      secret,
+      season,
+      telemetry: cleanClientTelemetry(d.telemetry),
+    };
+  })
+  .handler(async ({ data }): Promise<TournamentStateResponse> => {
+    return runWithBanCookie(async (sql, _ac, telemetry) => {
+      const tournamentServer = await import("@/lib/tournament.server");
+      return tournamentServer.getTournamentState(sql, {
+        id: data.id,
+        secret: data.secret,
+        season: data.season,
+        telemetry,
+      });
+    }, data.telemetry);
+  });
+
+export const joinTournamentServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return { ...auth, telemetry: cleanClientTelemetry(d.telemetry) };
+  })
+  .handler(async ({ data }): Promise<TournamentStateResponse> => {
+    return runWithBanCookie(async (sql, _ac, telemetry) => {
+      const tournamentServer = await import("@/lib/tournament.server");
+      return tournamentServer.joinTournament(sql, { ...data, telemetry });
+    }, data.telemetry);
+  });
+
+export const spinTournamentServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return {
+      ...auth,
+      entrySeq: cleanSeq(d.entrySeq),
+      telemetry: cleanClientTelemetry(d.telemetry),
+    };
+  })
+  .handler(async ({ data }): Promise<TournamentSpinResult> => {
+    return runWithBanCookie(async (sql, _ac, telemetry) => {
+      const tournamentServer = await import("@/lib/tournament.server");
+      return tournamentServer.executeTournamentSpin(sql, { ...data, telemetry });
+    }, data.telemetry);
+  });
+
+export const bankTournamentServer = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => {
+    const auth = parseBaseAuth(data);
+    const d = (data ?? {}) as Record<string, unknown>;
+    return {
+      ...auth,
+      entrySeq: cleanSeq(d.entrySeq),
+      telemetry: cleanClientTelemetry(d.telemetry),
+    };
+  })
+  .handler(async ({ data }): Promise<{ bankedAdded: number; state: TournamentStateResponse }> => {
+    return runWithBanCookie(async (sql, _ac, telemetry) => {
+      const tournamentServer = await import("@/lib/tournament.server");
+      return tournamentServer.executeTournamentBank(sql, { ...data, telemetry });
+    }, data.telemetry);
+  });
+

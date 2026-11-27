@@ -168,6 +168,14 @@ export function todayKey(): string {
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
+export function kyivTodayKey(): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv" }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
 export function dailySeed(): number {
   const key = todayKey();
   let h = 0;

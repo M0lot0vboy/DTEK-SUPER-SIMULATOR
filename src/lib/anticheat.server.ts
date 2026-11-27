@@ -3,7 +3,11 @@ import type { Sql } from "./db.ts";
 import { publicPlayerId } from "./crypto-hash.ts";
 import {
   BLACKOUT_MIN_MS,
+  BOSS_MAX_HP,
+  BP_MAX_TIER,
+  BP_TIER_SPINS,
   GOLDEN_SLICE_INDICES,
+  QUESTS,
   SPIN_COOLDOWN_NORMAL_MS,
   SPIN_COOLDOWN_TURBO_MS,
   SPIN_EVENTS,
@@ -11,6 +15,7 @@ import {
   SPIN_EVENT_KINDS,
   WHEEL_SLICES,
   XP_PER_OUTCOME,
+  bpReward,
   levelFromXp,
   xpForLevel,
   type ActiveSpinEvent,
@@ -24,6 +29,7 @@ import {
   GEMS_PER_OUTCOME,
   HARD_PITY,
   MAX_LOADOUT,
+  MAX_RELIC_LOADOUT,
   PITY_4,
   PULL_COST,
   ROOK_BOOST_SPINS,
@@ -33,8 +39,11 @@ import {
   countFives,
   executeGachaPulls,
   sanitizeCopies,
+  sanitizeCustomItems,
+  sanitizeEquippedRelics,
   sanitizeLoadout,
   sumCopies,
+  type CustomRelic,
   type PullOutcome,
 } from "./gacha/rules.ts";
 import { UNIT_BY_ID } from "./gacha/pool.ts";
@@ -89,6 +98,12 @@ export type PlayerSnapshot = {
   guaranteed: boolean;
   copies: Record<string, number>;
   loadout: string[];
+  customItems: CustomRelic[];
+  equippedRelics: string[];
+  questsClaimed: string[];
+  legacyGachaRefunded: boolean;
+  legacyRefundGems: number;
+  legacyRefundTickets: number;
   best5: string | null;
   best5Pity: number;
   lost5050Count: number;
@@ -107,6 +122,20 @@ export type AccountAuthResult = {
   id: string;
   secret: string;
   accountUsername: string;
+  state: PlayerSnapshot;
+};
+
+export type LegacyRefundResult = {
+  refundedNow: boolean;
+  gemsAdded: number;
+  ticketsAdded: number;
+  state: PlayerSnapshot;
+};
+
+export type QuestClaimResult = {
+  claimed: boolean;
+  gemsAdded: number;
+  claimKey: string;
   state: PlayerSnapshot;
 };
 
@@ -161,6 +190,12 @@ export type DbPlayerRow = {
   guaranteed: boolean;
   copies: unknown;
   loadout: unknown;
+  custom_items?: unknown;
+  equipped_relics?: unknown;
+  quests_claimed?: unknown;
+  legacy_gacha_refunded?: boolean | null;
+  legacy_refund_gems?: number | null;
+  legacy_refund_tickets?: number | null;
   best5: string | null;
   best5_pity: number;
   lost_5050_count: number;
@@ -216,13 +251,13 @@ function cryptoRandomFloat(): number {
   return randomInt(0, 1_000_000_000) / 1_000_000_000;
 }
 
-function clampInt(value: unknown, min: number, max: number): number {
+export function clampInt(value: unknown, min: number, max: number): number {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n)) return min;
   return Math.min(max, Math.max(min, n));
 }
 
-function parseJsonField(raw: unknown): unknown {
+export function parseJsonField(raw: unknown): unknown {
   if (typeof raw === "string") {
     try {
       return JSON.parse(raw);
@@ -231,6 +266,18 @@ function parseJsonField(raw: unknown): unknown {
     }
   }
   return raw;
+}
+
+export function sanitizeQuestsClaimed(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    const s = String(item ?? "").trim().slice(0, 64);
+    if (!s || out.includes(s)) continue;
+    out.push(s);
+    if (out.length >= 250) break;
+  }
+  return out;
 }
 
 function toMs(v: Date | string | null | undefined): number {
@@ -251,6 +298,9 @@ export function snapshotFromRow(
 ): PlayerSnapshot {
   const copies = sanitizeCopies(parseJsonField(row.copies));
   const loadout = sanitizeLoadout(parseJsonField(row.loadout), copies);
+  const customItems = sanitizeCustomItems(parseJsonField(row.custom_items));
+  const equippedRelics = sanitizeEquippedRelics(parseJsonField(row.equipped_relics), customItems);
+  const questsClaimed = sanitizeQuestsClaimed(parseJsonField(row.quests_claimed));
   const lastAidMs = toMs(row.last_aid_at);
   const rawAcct =
     accountUsernameOverride !== undefined ? accountUsernameOverride : (row.account_username ?? null);
@@ -271,6 +321,12 @@ export function snapshotFromRow(
     guaranteed: Boolean(row.guaranteed),
     copies,
     loadout,
+    customItems,
+    equippedRelics,
+    questsClaimed,
+    legacyGachaRefunded: Boolean(row.legacy_gacha_refunded),
+    legacyRefundGems: Math.max(0, Number(row.legacy_refund_gems ?? 0)),
+    legacyRefundTickets: Math.max(0, Number(row.legacy_refund_tickets ?? 0)),
     best5: row.best5 && UNIT_BY_ID[row.best5] ? row.best5 : null,
     best5Pity: Math.max(0, Number(row.best5_pity ?? 0)),
     lost5050Count: Math.max(0, Number(row.lost_5050_count ?? 0)),
@@ -630,8 +686,8 @@ async function ensureNewPlayerRow(
   const cleaned = cleanPlayerName(rawName);
   const safeName = cleaned.length >= 2 ? cleaned : "";
   await sql`
-    insert into leaderboard_players (id, name, season, token_hash, gems)
-    values (${id}, ${safeName}, ${SEASON}, ${tokenHash}, ${PULL_COST * 10})
+    insert into leaderboard_players (id, name, season, token_hash, gems, legacy_gacha_refunded)
+    values (${id}, ${safeName}, ${SEASON}, ${tokenHash}, ${PULL_COST * 10}, true)
     on conflict (id) do update set
       name = excluded.name,
       spins = 0,
@@ -647,6 +703,8 @@ async function ensureNewPlayerRow(
       guaranteed = false,
       copies = '{}'::jsonb,
       loadout = '[]'::jsonb,
+      quests_claimed = '[]'::jsonb,
+      legacy_gacha_refunded = true,
       best5 = null,
       best5_pity = 0,
       lost_5050_count = 0,
@@ -786,7 +844,7 @@ async function verifySessionTokenForRow(sql: Sql, row: DbPlayerRow, tokenHash: s
   return Boolean(sess[0]);
 }
 
-async function authenticatePlayer(
+export async function authenticatePlayer(
   sql: Sql,
   creds: { id: string; tokenHash: string },
   options: { createIfMissing?: boolean; name?: unknown; legacy?: LegacySeedInput } = {},
@@ -896,7 +954,9 @@ export async function executeServerSpin(
 
   const copies = sanitizeCopies(parseJsonField(row.copies));
   const loadout = sanitizeLoadout(parseJsonField(row.loadout), copies);
-  const buffs = computeBuffs(loadout, copies);
+  const customItems = sanitizeCustomItems(parseJsonField(row.custom_items));
+  const equippedRelics = sanitizeEquippedRelics(parseJsonField(row.equipped_relics), customItems);
+  const buffs = computeBuffs(loadout, copies, customItems, equippedRelics);
   const boost = Number(row.boost_spins ?? 0) > 0 ? 3 : 1;
   const baseGems = Math.round(GEMS_PER_OUTCOME[outcome] * (1 + buffs.gems) * boost);
   const refunded = outcome !== "respin" && buffs.refund > 0 && cryptoRandomFloat() < buffs.refund;
@@ -1548,3 +1608,265 @@ export async function logoutPlayerAccount(
   `;
   return { ok: true };
 }
+
+export function computeLegacyRefundPackage(
+  serverSpins: number,
+  serverPulls: number,
+  clientLegacyPulls?: unknown,
+): { gemsAdded: number; ticketsAdded: number; effectivePulls: number } {
+  const spins = Math.max(0, Math.floor(Number(serverSpins) || 0));
+  const pulls = Math.max(0, Math.floor(Number(serverPulls) || 0));
+  if (spins <= 0 && pulls <= 0) {
+    return { gemsAdded: 320, ticketsAdded: 2, effectivePulls: 0 };
+  }
+  const maxPullsAllowedBySpins = Math.min(300, Math.floor(spins * 1.5) + 15);
+  const claimedPulls = Math.min(clampInt(clientLegacyPulls, 0, 5000), maxPullsAllowedBySpins);
+  const serverBaselinePulls = Math.min(80, Math.floor(spins / 5));
+  const effectivePulls = Math.max(claimedPulls, serverBaselinePulls);
+  const gemsAdded = Math.min(4800, 320 + effectivePulls * 20);
+  const ticketsAdded = Math.min(15, 2 + Math.floor(effectivePulls / 15));
+  return { gemsAdded, ticketsAdded, effectivePulls };
+}
+
+export async function executeClaimLegacyGachaRefund(
+  sql: Sql,
+  input: {
+    id: string;
+    secret: string;
+    season: number;
+    legacyPulls?: unknown;
+    telemetry?: TelemetryContext;
+  },
+): Promise<LegacyRefundResult> {
+  const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
+  const row = await authenticatePlayer(sql, creds);
+
+  if (row.legacy_gacha_refunded) {
+    await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+    return {
+      refundedNow: false,
+      gemsAdded: 0,
+      ticketsAdded: 0,
+      state: snapshotFromRow(row, row.account_username ?? null),
+    };
+  }
+
+  const pkg = computeLegacyRefundPackage(Number(row.spins), Number(row.pulls), input.legacyPulls);
+
+  const updated = await sql<DbPlayerRow>`
+    update leaderboard_players
+    set
+      gems = gems + ${pkg.gemsAdded},
+      tickets = tickets + ${pkg.ticketsAdded},
+      legacy_gacha_refunded = true,
+      legacy_refund_gems = ${pkg.gemsAdded},
+      legacy_refund_tickets = ${pkg.ticketsAdded},
+      seq = seq + 1,
+      updated_at = now()
+    where id = ${creds.id}
+      and season = ${SEASON}
+      and legacy_gacha_refunded = false
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
+    returning *
+  `;
+
+  if (!updated[0]) {
+    const latest = await selectPlayer(sql, creds.id);
+    if (!latest) throw new Error("Профіль не знайдено");
+    return {
+      refundedNow: false,
+      gemsAdded: 0,
+      ticketsAdded: 0,
+      state: snapshotFromRow(latest, row.account_username ?? null),
+    };
+  }
+
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+  return {
+    refundedNow: true,
+    gemsAdded: pkg.gemsAdded,
+    ticketsAdded: pkg.ticketsAdded,
+    state: snapshotFromRow(updated[0], row.account_username ?? null),
+  };
+}
+
+export async function executeServerToggleRelic(
+  sql: Sql,
+  input: {
+    id: string;
+    secret: string;
+    season: number;
+    seq: number;
+    relicId: string;
+    telemetry?: TelemetryContext;
+  },
+): Promise<{ status: "equipped" | "removed" | "full" | "locked"; state: PlayerSnapshot }> {
+  const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
+  const seq = clampInt(input.seq, 0, 1_000_000_000);
+  const relicId = String(input.relicId ?? "").trim().slice(0, 64);
+  if (!relicId) throw new Error("Невідома реліквія");
+
+  const row = await authenticatePlayer(sql, creds);
+  if (seq !== Number(row.seq)) throw new Error("CONFLICT");
+
+  const customItems = sanitizeCustomItems(parseJsonField(row.custom_items));
+  const owned = customItems.some((item) => item.id === relicId);
+  if (!owned) {
+    await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+    return { status: "locked", state: snapshotFromRow(row, row.account_username ?? null) };
+  }
+
+  const equipped = sanitizeEquippedRelics(parseJsonField(row.equipped_relics), customItems);
+  let status: "equipped" | "removed" | "full";
+  let nextEquipped: string[];
+  if (equipped.includes(relicId)) {
+    nextEquipped = equipped.filter((x) => x !== relicId);
+    status = "removed";
+  } else if (equipped.length >= MAX_RELIC_LOADOUT) {
+    await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+    return { status: "full", state: snapshotFromRow(row, row.account_username ?? null) };
+  } else {
+    nextEquipped = [...equipped, relicId];
+    status = "equipped";
+  }
+
+  const updated = await sql<DbPlayerRow>`
+    update leaderboard_players
+    set
+      equipped_relics = ${JSON.stringify(nextEquipped)}::jsonb,
+      seq = seq + 1,
+      updated_at = now()
+    where id = ${creds.id}
+      and season = ${SEASON}
+      and seq = ${seq}
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
+    returning *
+  `;
+  if (!updated[0]) throw new Error("CONFLICT");
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+  return { status, state: snapshotFromRow(updated[0], row.account_username ?? null) };
+}
+
+function getKyivDateKey(): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Kyiv" }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+export async function executeServerClaimQuest(
+  sql: Sql,
+  input: {
+    id: string;
+    secret: string;
+    season: number;
+    seq: number;
+    kind: "daily" | "bp" | "raid";
+    targetId: string;
+    telemetry?: TelemetryContext;
+  },
+): Promise<QuestClaimResult> {
+  const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
+  const seq = clampInt(input.seq, 0, 1_000_000_000);
+  const row = await authenticatePlayer(sql, creds);
+  if (seq !== Number(row.seq)) throw new Error("CONFLICT");
+
+  const claimed = sanitizeQuestsClaimed(parseJsonField(row.quests_claimed));
+  const spins = Math.max(0, Number(row.spins));
+  let claimKey = "";
+  let gemsAdded = 0;
+
+  if (input.kind === "daily") {
+    const q = QUESTS.find((item) => item.id === input.targetId);
+    if (!q) throw new Error("Невідомий квест");
+    if (spins < q.target) {
+      throw new Error(`Потрібно щонайменше ${q.target} круток на сервері`);
+    }
+    const dayKey = getKyivDateKey();
+    claimKey = `daily:${q.id}:${dayKey}`;
+    gemsAdded = q.reward;
+  } else if (input.kind === "bp") {
+    const tier = clampInt(input.targetId, 1, BP_MAX_TIER);
+    if (String(tier) !== String(input.targetId).trim()) throw new Error("Невірний рівень бойової перепустки");
+    const requiredSpins = tier * BP_TIER_SPINS;
+    if (spins < requiredSpins) {
+      throw new Error(`Потрібно ${requiredSpins} круток для рівня ${tier}`);
+    }
+    claimKey = `bp:${tier}`;
+    gemsAdded = bpReward(tier);
+  } else if (input.kind === "raid") {
+    const bossNum = clampInt(input.targetId, 1, 1000);
+    if (String(bossNum) !== String(input.targetId).trim()) throw new Error("Невірний індекс рейд-боса");
+    const requiredSpins = bossNum * BOSS_MAX_HP;
+    if (spins < requiredSpins) {
+      throw new Error(`Для перемоги над босом #${bossNum} потрібно ${requiredSpins} круток`);
+    }
+    claimKey = `raid:${bossNum}`;
+    gemsAdded = 250;
+  } else {
+    throw new Error("Невідомий тип нагороди");
+  }
+
+  if (claimed.includes(claimKey)) {
+    await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+    return {
+      claimed: false,
+      gemsAdded: 0,
+      claimKey,
+      state: snapshotFromRow(row, row.account_username ?? null),
+    };
+  }
+
+  const nextClaimed = [...claimed.slice(-240), claimKey];
+  const updated = await sql<DbPlayerRow>`
+    update leaderboard_players
+    set
+      gems = gems + ${gemsAdded},
+      quests_claimed = ${JSON.stringify(nextClaimed)}::jsonb,
+      seq = seq + 1,
+      updated_at = now()
+    where id = ${creds.id}
+      and season = ${SEASON}
+      and seq = ${seq}
+      and not (coalesce(quests_claimed, '[]'::jsonb) @> ${JSON.stringify([claimKey])}::jsonb)
+      and (
+        token_hash = ${creds.tokenHash}
+        or exists (
+          select 1 from player_sessions ps
+          where ps.token_hash = ${creds.tokenHash}
+            and ps.player_id = leaderboard_players.id
+            and ps.expires_at > now()
+        )
+      )
+    returning *
+  `;
+  if (!updated[0]) throw new Error("CONFLICT");
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+  return {
+    claimed: true,
+    gemsAdded,
+    claimKey,
+    state: snapshotFromRow(updated[0], row.account_username ?? null),
+  };
+}
+

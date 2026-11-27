@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { UserCheck, UserPlus, Zap } from "lucide-react";
 import { useGame } from "@/lib/game/store";
+import { useGacha } from "@/lib/gacha/engine";
 import { levelFromXp, titleFor, xpForLevel } from "@/lib/game/data";
 import { usePlayer } from "@/lib/game/player";
 
@@ -13,7 +14,7 @@ export function Hud({
   ready: boolean;
   onOpenAccount?: () => void;
 }) {
-  const kw = useGame((s) => s.kw);
+  const gems = useGacha((s) => s.gems);
   const xp = useGame((s) => s.xp);
   const pet = useGame((s) => s.pet);
   const accountUsername = usePlayer((s) => s.accountUsername);
@@ -78,13 +79,13 @@ export function Hud({
         ) : null}
         <div className="flex flex-col items-end">
           <span
-            title="кВт·год — енергія для гачі"
+            title="кВт-геми — валюта для ⚔️ Ісекаю"
             className="flex items-center gap-1 rounded-full border border-amber/50 bg-ink px-2 py-1"
           >
             <Zap className="size-3.5 fill-amber text-amber" aria-hidden />
-            <span className="font-display text-sm text-amber">{ready ? kw : 0}</span>
+            <span className="font-display text-sm text-amber">{ready ? gems.toLocaleString("uk-UA") : 0}</span>
           </span>
-          <span className="mt-0.5 text-[9px] tracking-widest text-muted uppercase">енергія кВт</span>
+          <span className="mt-0.5 text-[9px] tracking-widest text-muted uppercase">кВт-геми</span>
         </div>
       </div>
     </section>

@@ -18,6 +18,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Trophy,
   Users,
   X,
 } from "lucide-react";
@@ -35,12 +36,13 @@ import {
   type AdminStatusResponse,
   type BanType,
 } from "@/lib/admin";
+import { TournamentAdminPanel } from "@/components/admin/tournament-admin-panel";
 import { RARITY_COLOR, UNIT_BY_ID } from "@/lib/gacha/pool";
 import { HARD_PITY, PITY_4, constellationOf } from "@/lib/gacha/rules";
 
 export const Route = createFileRoute("/admin")({ component: AdminPage });
 
-type AdminTab = "players" | "bans" | "logs";
+type AdminTab = "players" | "tournament" | "bans" | "logs";
 type SortBy = "updated" | "spins" | "flags" | "pulls";
 
 const BAN_META: Record<BanType, { label: string; short: string; icon: typeof Globe }> = {
@@ -472,6 +474,9 @@ function AdminPage() {
           <TabBtn active={tab === "players"} onClick={() => setTab("players")}>
             <Users className="size-3.5" /> Гравці ({dashboard?.players.length ?? 0})
           </TabBtn>
+          <TabBtn active={tab === "tournament"} onClick={() => setTab("tournament")}>
+            <Trophy className="size-3.5" /> Турнір {dashboard?.tournament.active ? "• LIVE" : ""}
+          </TabBtn>
           <TabBtn active={tab === "bans"} onClick={() => setTab("bans")}>
             <Ban className="size-3.5" /> Бани ({dashboard?.bans.filter((b) => b.active).length ?? 0})
           </TabBtn>
@@ -707,6 +712,18 @@ function AdminPage() {
               </div>
             </div>
           ) : null}
+
+          {tab === "tournament" ? (
+            <TournamentAdminPanel
+              overview={dashboard?.tournament ?? null}
+              onUpdated={(next) =>
+                setDashboard((prev) => (prev ? { ...prev, tournament: next } : prev))
+              }
+              onError={(msg) => setActionError(msg)}
+              onNotice={(msg) => setActionNotice(msg)}
+              onSpectate={(id) => setSpectateId(id)}
+            />
+          ) : null}
         </section>
 
         {spectateId ? (
@@ -833,6 +850,43 @@ function AdminPage() {
                                 </span>
                               );
                             })
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 border-t border-line pt-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                        <span className="text-muted">
+                          Турнірні реліквії ({spectateData.customItems.length}):
+                        </span>
+                        <span className="font-mono text-[10px] text-muted">
+                          Рефанд гачі:{" "}
+                          <strong className={spectateData.legacyGachaRefunded ? "text-on" : "text-amber"}>
+                            {spectateData.legacyGachaRefunded
+                              ? `+${spectateData.legacyRefundGems}г / +${spectateData.legacyRefundTickets}т`
+                              : "очікує"}
+                          </strong>
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {spectateData.customItems.length === 0 ? (
+                          <span className="text-[11px] text-muted">Немає кастомних реліквій</span>
+                        ) : (
+                          spectateData.customItems.map((item) => {
+                            const equipped = spectateData.equippedRelics.includes(item.id);
+                            return (
+                              <span
+                                key={item.id}
+                                className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${
+                                  equipped
+                                    ? "border-amber bg-amber/15 text-amber"
+                                    : "border-line bg-surface text-fg"
+                                }`}
+                              >
+                                {item.emoji} {item.name} {equipped ? "★" : ""}
+                              </span>
+                            );
+                          })
                         )}
                       </div>
                     </div>
