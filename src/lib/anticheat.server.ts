@@ -1,4 +1,4 @@
-import { createHash, randomInt, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import type { Sql } from "./db.ts";
 import { publicPlayerId } from "./crypto-hash.ts";
 import {
@@ -41,6 +41,26 @@ import { UNIT_BY_ID } from "./gacha/pool.ts";
 
 export const ID_RE = /^[a-zA-Z0-9-]{8,64}$/;
 export const SECRET_RE = /^[a-f0-9]{64}$/i;
+export const BAN_ERROR_PREFIX = "DTEK_BANNED:";
+
+export type BanType = "ip" | "chrome" | "pc";
+
+export type ActiveBanInfo = {
+  banned: boolean;
+  types: BanType[];
+  reason: string;
+  marker: string | null;
+};
+
+export type TelemetryContext = {
+  ip?: string | null;
+  chromeFp?: string | null;
+  pcFp?: string | null;
+  userAgent?: string | null;
+  banToken?: string | null;
+  cookieBanToken?: string | null;
+  playerId?: string | null;
+};
 
 export type LeaderRow = {
   publicId: string;
@@ -78,6 +98,7 @@ export type PlayerSnapshot = {
   aidAt: number;
   rookReadyAt: number;
   seq: number;
+  demonetizedAt: number;
 };
 
 export type LegacySeedInput = {
@@ -113,7 +134,7 @@ export type PullServerResult = {
   state: PlayerSnapshot;
 };
 
-type DbPlayerRow = {
+export type DbPlayerRow = {
   id: string;
   name: string;
   spins: number;
@@ -143,6 +164,12 @@ type DbPlayerRow = {
   rook_ready_at: Date | string | null;
   seq: number;
   flags: number;
+  ip_hash?: string | null;
+  ip_hint?: string | null;
+  chrome_fp?: string | null;
+  pc_fp?: string | null;
+  user_agent?: string | null;
+  last_reset_at?: Date | string | null;
   updated_at: Date | string;
 };
 
@@ -236,7 +263,241 @@ export function snapshotFromRow(row: DbPlayerRow): PlayerSnapshot {
     aidAt: lastAidMs > 0 ? lastAidMs + AID_COOLDOWN_MS : 0,
     rookReadyAt: toMs(row.rook_ready_at),
     seq: Math.max(0, Number(row.seq ?? 0)),
+    demonetizedAt: toMs(row.last_reset_at),
   };
+}
+
+function getBanSigningSecret(): string {
+  return (
+    process.env.BAN_SIGNING_SECRET ||
+    process.env.BETTER_AUTH_SECRET ||
+    process.env.DATABASE_URL ||
+    process.env.ADMIN_PASSWORD_HASH ||
+    process.env.ADMIN_PASSWORD ||
+    "dtek-local-ban-hmac-key-v1"
+  );
+}
+
+export function normalizeIp(raw?: string | null): string | null {
+  let ip = String(raw ?? "").trim().toLowerCase();
+  if (!ip) return null;
+  if (ip.includes(",")) ip = ip.split(",")[0]!.trim();
+  if (ip.startsWith("::ffff:")) ip = ip.slice(7);
+  if (ip === "::1") ip = "127.0.0.1";
+  if (ip.length > 64) return null;
+  return ip || null;
+}
+
+export function hashIp(rawIp: string): string {
+  const norm = normalizeIp(rawIp) ?? rawIp;
+  return createHash("sha256").update(`dtek-ip-v1:${norm}`).digest("hex");
+}
+
+export function maskIp(rawIp?: string | null): string | null {
+  const norm = normalizeIp(rawIp);
+  if (!norm) return null;
+  if (norm.includes(".")) {
+    const parts = norm.split(".");
+    if (parts.length === 4) return `${parts[0]}.${parts[1]}.*.*`;
+  }
+  if (norm.includes(":")) {
+    const parts = norm.split(":").filter(Boolean);
+    return `${parts.slice(0, 2).join(":")}:*`;
+  }
+  return `${norm.slice(0, 4)}***`;
+}
+
+export function cleanFingerprint(raw?: string | null): string | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  return /^[a-f0-9]{16,64}$/.test(s) ? s : null;
+}
+
+export function cleanUserAgent(raw?: string | null): string | null {
+  let out = "";
+  for (const ch of String(raw ?? "").trim()) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code >= 0x20 && code !== 0x7f) out += ch;
+    if (out.length >= 280) break;
+  }
+  return out || null;
+}
+
+type BanMarkerPayload = {
+  v: 1;
+  ids: number[];
+  types: BanType[];
+  cfp?: string;
+  pfp?: string;
+};
+
+export function signBanMarker(payload: Omit<BanMarkerPayload, "v">): string {
+  const body: BanMarkerPayload = {
+    v: 1,
+    ids: payload.ids.slice(0, 12),
+    types: payload.types.slice(0, 3),
+    ...(payload.cfp ? { cfp: payload.cfp } : {}),
+    ...(payload.pfp ? { pfp: payload.pfp } : {}),
+  };
+  const encoded = Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
+  const sig = createHmac("sha256", getBanSigningSecret()).update(encoded).digest("hex");
+  return `${encoded}.${sig}`;
+}
+
+export function verifyBanMarker(token?: string | null): BanMarkerPayload | null {
+  if (!token || typeof token !== "string") return null;
+  const dot = token.indexOf(".");
+  if (dot <= 0 || dot >= token.length - 1) return null;
+  const encoded = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  if (!/^[a-f0-9]{64}$/i.test(sig)) return null;
+  const expected = createHmac("sha256", getBanSigningSecret()).update(encoded).digest("hex");
+  const a = Buffer.from(sig.toLowerCase(), "utf8");
+  const b = Buffer.from(expected.toLowerCase(), "utf8");
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Partial<BanMarkerPayload>;
+    if (parsed.v !== 1 || !Array.isArray(parsed.ids)) return null;
+    const ids = parsed.ids.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0);
+    if (ids.length === 0) return null;
+    const types = Array.isArray(parsed.types)
+      ? parsed.types.filter((t): t is BanType => t === "ip" || t === "chrome" || t === "pc")
+      : [];
+    return {
+      v: 1,
+      ids,
+      types,
+      cfp: cleanFingerprint(parsed.cfp) ?? undefined,
+      pfp: cleanFingerprint(parsed.pfp) ?? undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function parseBanError(err: unknown): ActiveBanInfo | null {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  if (!msg.startsWith(BAN_ERROR_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(msg.slice(BAN_ERROR_PREFIX.length)) as Partial<ActiveBanInfo>;
+    const types = Array.isArray(parsed.types)
+      ? parsed.types.filter((t): t is BanType => t === "ip" || t === "chrome" || t === "pc")
+      : [];
+    return {
+      banned: true,
+      types,
+      reason: typeof parsed.reason === "string" ? parsed.reason : "",
+      marker: typeof parsed.marker === "string" ? parsed.marker : null,
+    };
+  } catch {
+    return { banned: true, types: [], reason: "Доступ заблоковано адміністрацією", marker: null };
+  }
+}
+
+export async function checkPlayerBan(sql: Sql, telemetry?: TelemetryContext): Promise<ActiveBanInfo> {
+  const ip = normalizeIp(telemetry?.ip);
+  const ipHash = ip ? hashIp(ip) : null;
+  const chromeFp = cleanFingerprint(telemetry?.chromeFp);
+  const pcFp = cleanFingerprint(telemetry?.pcFp);
+  const playerId = ID_RE.test(String(telemetry?.playerId ?? "")) ? String(telemetry!.playerId) : null;
+
+  const verifiedMarkers = [
+    verifyBanMarker(telemetry?.banToken),
+    verifyBanMarker(telemetry?.cookieBanToken),
+  ].filter((m): m is BanMarkerPayload => Boolean(m));
+
+  const candidateValues = Array.from(
+    new Set(
+      [
+        ipHash,
+        chromeFp,
+        pcFp,
+        ...verifiedMarkers.map((m) => m.cfp ?? null),
+        ...verifiedMarkers.map((m) => m.pfp ?? null),
+      ].filter((v): v is string => Boolean(v)),
+    ),
+  );
+  const candidatePlayerIds = playerId ? [playerId] : [];
+  const candidateBanIds = Array.from(new Set(verifiedMarkers.flatMap((m) => m.ids.map(String))));
+
+  if (candidateValues.length === 0 && candidatePlayerIds.length === 0 && candidateBanIds.length === 0) {
+    return { banned: false, types: [], reason: "", marker: null };
+  }
+
+  const rows = await sql<{
+    id: number | string;
+    ban_type: BanType;
+    ban_value: string;
+    player_id: string | null;
+    reason: string;
+  }>`
+    select id, ban_type, ban_value, player_id, reason
+    from player_bans
+    where active = true
+      and (
+        ban_value in (select jsonb_array_elements_text(${JSON.stringify(candidateValues)}::jsonb))
+        or player_id in (select jsonb_array_elements_text(${JSON.stringify(candidatePlayerIds)}::jsonb))
+        or id::text in (select jsonb_array_elements_text(${JSON.stringify(candidateBanIds)}::jsonb))
+      )
+    order by created_at desc
+  `;
+
+  if (rows.length === 0) {
+    return { banned: false, types: [], reason: "", marker: null };
+  }
+
+  const types = Array.from(new Set(rows.map((r) => r.ban_type))) as BanType[];
+  const reasons = Array.from(new Set(rows.map((r) => r.reason.trim()).filter(Boolean)));
+  const ids = rows.map((r) => Number(r.id)).filter((n) => Number.isInteger(n) && n > 0);
+  const marker = signBanMarker({
+    ids,
+    types,
+    cfp: chromeFp ?? verifiedMarkers[0]?.cfp,
+    pfp: pcFp ?? verifiedMarkers[0]?.pfp,
+  });
+
+  return {
+    banned: true,
+    types,
+    reason: reasons.join(" • ") || "Порушення правил чесної гри",
+    marker,
+  };
+}
+
+export async function assertNotBanned(sql: Sql, telemetry?: TelemetryContext): Promise<void> {
+  const info = await checkPlayerBan(sql, telemetry);
+  if (info.banned) {
+    throw new Error(`${BAN_ERROR_PREFIX}${JSON.stringify(info)}`);
+  }
+}
+
+export async function recordPlayerTelemetry(
+  sql: Sql,
+  playerId: string,
+  telemetry?: TelemetryContext,
+): Promise<void> {
+  if (!telemetry) return;
+  const ip = normalizeIp(telemetry.ip);
+  const ipHash = ip ? hashIp(ip) : null;
+  const ipHint = ip ? maskIp(ip) : null;
+  const chromeFp = cleanFingerprint(telemetry.chromeFp);
+  const pcFp = cleanFingerprint(telemetry.pcFp);
+  const userAgent = cleanUserAgent(telemetry.userAgent);
+  if (!ipHash && !chromeFp && !pcFp && !userAgent) return;
+
+  try {
+    await sql`
+      update leaderboard_players
+      set
+        ip_hash = coalesce(${ipHash}, ip_hash),
+        ip_hint = coalesce(${ipHint}, ip_hint),
+        chrome_fp = coalesce(${chromeFp}, chrome_fp),
+        pc_fp = coalesce(${pcFp}, pc_fp),
+        user_agent = coalesce(${userAgent}, user_agent)
+      where id = ${playerId}
+    `;
+  } catch {
+    // Telemetry capture must never interrupt gameplay if migration lags.
+  }
 }
 
 export function assertValidCredentials(data: { id?: unknown; secret?: unknown; season?: unknown }) {
@@ -456,22 +717,32 @@ async function authenticatePlayer(
 
 export async function initPlayerSession(
   sql: Sql,
-  input: { id: string; secret: string; season: number; name?: unknown; legacy?: LegacySeedInput },
+  input: {
+    id: string;
+    secret: string;
+    season: number;
+    name?: unknown;
+    legacy?: LegacySeedInput;
+    telemetry?: TelemetryContext;
+  },
 ): Promise<PlayerSnapshot> {
   const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
   const row = await authenticatePlayer(sql, creds, {
     createIfMissing: true,
     name: input.name,
     legacy: input.legacy,
   });
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
   return snapshotFromRow(row);
 }
 
 export async function updatePlayerName(
   sql: Sql,
-  input: { id: string; secret: string; season: number; name: unknown },
+  input: { id: string; secret: string; season: number; name: unknown; telemetry?: TelemetryContext },
 ): Promise<PlayerSnapshot> {
   const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
   const cleaned = cleanPlayerName(input.name);
   if (cleaned.length < 2) throw new Error("Нікнейм має бути від 2 символів");
 
@@ -488,14 +759,16 @@ export async function updatePlayerName(
     await logViolation(sql, creds.id, "rename_auth_failed", {}, true);
     throw new Error("Помилка перевірки сесії гравця");
   }
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
   return snapshotFromRow(updated[0] ?? row);
 }
 
 export async function executeServerSpin(
   sql: Sql,
-  input: { id: string; secret: string; season: number; seq: number; name?: unknown },
+  input: { id: string; secret: string; season: number; seq: number; name?: unknown; telemetry?: TelemetryContext },
 ): Promise<SpinExecutionResult> {
   const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
   const seq = clampInt(input.seq, 0, 1_000_000_000);
   const row = await authenticatePlayer(sql, creds, { createIfMissing: true, name: input.name });
 
@@ -582,6 +855,7 @@ export async function executeServerSpin(
     throw new Error("CONFLICT");
   }
 
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
   return {
     sliceIndex,
     outcome,
@@ -598,12 +872,16 @@ export async function executeServerSpin(
 
 export async function executeClearBlackout(
   sql: Sql,
-  input: { id: string; secret: string; season: number; seq: number },
+  input: { id: string; secret: string; season: number; seq: number; telemetry?: TelemetryContext },
 ): Promise<PlayerSnapshot> {
   const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
   const seq = clampInt(input.seq, 0, 1_000_000_000);
   const row = await authenticatePlayer(sql, creds);
-  if (!row.in_blackout) return snapshotFromRow(row);
+  if (!row.in_blackout) {
+    await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+    return snapshotFromRow(row);
+  }
   if (seq !== Number(row.seq)) throw new Error("CONFLICT");
 
   const updated = await sql<DbPlayerRow>`
@@ -627,14 +905,24 @@ export async function executeClearBlackout(
     await logViolation(sql, creds.id, "blackout_too_fast", {}, true);
     throw new Error("Занадто швидко! Запалюй свічку чесно.");
   }
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
   return snapshotFromRow(updated[0]);
 }
 
 export async function executeServerPull(
   sql: Sql,
-  input: { id: string; secret: string; season: number; seq: number; count: number; name?: unknown },
+  input: {
+    id: string;
+    secret: string;
+    season: number;
+    seq: number;
+    count: number;
+    name?: unknown;
+    telemetry?: TelemetryContext;
+  },
 ): Promise<PullServerResult> {
   const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
   const count = Number(input.count);
   if (count !== 1 && count !== 10) throw new Error("Можна молитися лише ×1 або ×10");
   const seq = clampInt(input.seq, 0, 1_000_000_000);
@@ -687,14 +975,16 @@ export async function executeServerPull(
   `;
   if (!updated[0]) throw new Error("CONFLICT");
 
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
   return { results: exec.results, state: snapshotFromRow(updated[0]) };
 }
 
 export async function executeServerAid(
   sql: Sql,
-  input: { id: string; secret: string; season: number; seq: number; name?: unknown },
+  input: { id: string; secret: string; season: number; seq: number; name?: unknown; telemetry?: TelemetryContext },
 ): Promise<PlayerSnapshot> {
   const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
   const seq = clampInt(input.seq, 0, 1_000_000_000);
   const row = await authenticatePlayer(sql, creds, { createIfMissing: true, name: input.name });
   if (seq !== Number(row.seq)) throw new Error("CONFLICT");
@@ -720,14 +1010,16 @@ export async function executeServerAid(
     await logViolation(sql, creds.id, "aid_cooldown", {}, true);
     throw new Error("Аварійна допомога ще перезаряджається");
   }
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
   return snapshotFromRow(updated[0]);
 }
 
 export async function executeServerExchange(
   sql: Sql,
-  input: { id: string; secret: string; season: number; seq: number },
+  input: { id: string; secret: string; season: number; seq: number; telemetry?: TelemetryContext },
 ): Promise<PlayerSnapshot> {
   const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
   const seq = clampInt(input.seq, 0, 1_000_000_000);
   const row = await authenticatePlayer(sql, creds);
   if (seq !== Number(row.seq)) throw new Error("CONFLICT");
@@ -747,14 +1039,16 @@ export async function executeServerExchange(
     returning *
   `;
   if (!updated[0]) throw new Error("Мало копіуму для обміну");
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
   return snapshotFromRow(updated[0]);
 }
 
 export async function executeServerEquip(
   sql: Sql,
-  input: { id: string; secret: string; season: number; seq: number; unitId: string },
+  input: { id: string; secret: string; season: number; seq: number; unitId: string; telemetry?: TelemetryContext },
 ): Promise<{ status: "equipped" | "removed" | "full" | "locked"; state: PlayerSnapshot }> {
   const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
   const seq = clampInt(input.seq, 0, 1_000_000_000);
   const unitId = String(input.unitId ?? "");
   if (!UNIT_BY_ID[unitId]) {
@@ -767,7 +1061,10 @@ export async function executeServerEquip(
 
   const copies = sanitizeCopies(parseJsonField(row.copies));
   const loadout = sanitizeLoadout(parseJsonField(row.loadout), copies);
-  if (!copies[unitId]) return { status: "locked", state: snapshotFromRow(row) };
+  if (!copies[unitId]) {
+    await recordPlayerTelemetry(sql, creds.id, input.telemetry);
+    return { status: "locked", state: snapshotFromRow(row) };
+  }
 
   let status: "equipped" | "removed" | "full";
   let nextLoadout: string[];
@@ -775,6 +1072,7 @@ export async function executeServerEquip(
     nextLoadout = loadout.filter((x) => x !== unitId);
     status = "removed";
   } else if (loadout.length >= MAX_LOADOUT) {
+    await recordPlayerTelemetry(sql, creds.id, input.telemetry);
     return { status: "full", state: snapshotFromRow(row) };
   } else {
     nextLoadout = [...loadout, unitId];
@@ -794,14 +1092,16 @@ export async function executeServerEquip(
     returning *
   `;
   if (!updated[0]) throw new Error("CONFLICT");
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
   return { status, state: snapshotFromRow(updated[0]) };
 }
 
 export async function executeServerRook(
   sql: Sql,
-  input: { id: string; secret: string; season: number; seq: number },
+  input: { id: string; secret: string; season: number; seq: number; telemetry?: TelemetryContext },
 ): Promise<PlayerSnapshot> {
   const creds = assertValidCredentials(input);
+  await assertNotBanned(sql, { ...input.telemetry, playerId: creds.id });
   const seq = clampInt(input.seq, 0, 1_000_000_000);
   const row = await authenticatePlayer(sql, creds);
   if (seq !== Number(row.seq)) throw new Error("CONFLICT");
@@ -828,6 +1128,7 @@ export async function executeServerRook(
     returning *
   `;
   if (!updated[0]) throw new Error("Тура ще відновлюється");
+  await recordPlayerTelemetry(sql, creds.id, input.telemetry);
   return snapshotFromRow(updated[0]);
 }
 
@@ -853,6 +1154,16 @@ export async function fetchLeaderboard(sql: Sql): Promise<LeaderRow[]> {
       and level >= 1
       and level <= 10
       and (100 * (level - 1) * (level - 1)) <= spins * 40
+      and not exists (
+        select 1 from player_bans b
+        where b.active = true
+          and (
+            b.player_id = leaderboard_players.id
+            or (b.ban_type = 'ip' and leaderboard_players.ip_hash is not null and b.ban_value = leaderboard_players.ip_hash)
+            or (b.ban_type = 'chrome' and leaderboard_players.chrome_fp is not null and b.ban_value = leaderboard_players.chrome_fp)
+            or (b.ban_type = 'pc' and leaderboard_players.pc_fp is not null and b.ban_value = leaderboard_players.pc_fp)
+          )
+      )
     order by spins desc, fives desc, updated_at asc
     limit 50
   `;

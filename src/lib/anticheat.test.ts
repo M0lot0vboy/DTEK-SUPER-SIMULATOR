@@ -37,7 +37,12 @@ async function createTestSql(): Promise<Sql> {
     },
   });
   await pg.waitReady;
-  for (const file of ["0002_leaderboard.sql", "0003_leaderboard_season.sql", "0004_anticheat.sql"]) {
+  for (const file of [
+    "0002_leaderboard.sql",
+    "0003_leaderboard_season.sql",
+    "0004_anticheat.sql",
+    "0005_admin_and_bans.sql",
+  ]) {
     await pg.exec(readFileSync(join(ROOT, "migrations", file), "utf8"));
   }
   const run = async <T>(text: string, params: unknown[]) => {
@@ -215,6 +220,7 @@ describe("DTEK anticheat", () => {
       ],
     );
     await pg.exec(readFileSync(join(ROOT, "migrations", "0004_anticheat.sql"), "utf8"));
+    await pg.exec(readFileSync(join(ROOT, "migrations", "0005_admin_and_bans.sql"), "utf8"));
     const legacySql = (async <T = Record<string, unknown>>(
       strings: TemplateStringsArray,
       ...values: unknown[]

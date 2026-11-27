@@ -5,7 +5,9 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useGame } from "@/lib/game/store";
 import { useGacha } from "@/lib/gacha/engine";
+import { collectTelemetry, persistBanMarker } from "@/lib/fingerprint";
 import {
+  checkAccess,
   claimAidServer,
   clearBlackoutServer,
   exchangeShardsServer,
@@ -16,6 +18,8 @@ import {
   setPlayerName,
   spinWheel,
   toggleEquipServer,
+  type ActiveBanInfo,
+  type BanType,
   type LegacySeedInput,
   type PlayerSnapshot,
   type PullServerResult,
@@ -24,6 +28,7 @@ import {
 import { publicPlayerId } from "@/lib/crypto-hash";
 
 const SECRET_RE = /^[a-f0-9]{64}$/i;
+const BAN_PREFIX = "DTEK_BANNED:";
 
 function newId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -37,6 +42,73 @@ function newSecret(): string {
     return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   }
   return Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+}
+
+export type BanUiState = {
+  banned: boolean;
+  checked: boolean;
+  types: BanType[];
+  reason: string;
+  marker: string | null;
+};
+
+export const useBanState = create<BanUiState>()(() => ({
+  banned: false,
+  checked: false,
+  types: [],
+  reason: "",
+  marker: null,
+}));
+
+function applyBanInfoToUi(info: ActiveBanInfo): void {
+  if (info.banned) {
+    useBanState.setState({
+      banned: true,
+      checked: true,
+      types: info.types,
+      reason: info.reason || "Порушення правил чесної гри",
+      marker: info.marker,
+    });
+    void persistBanMarker(info.marker);
+  } else {
+    useBanState.setState({
+      banned: false,
+      checked: true,
+      types: [],
+      reason: "",
+      marker: null,
+    });
+    void persistBanMarker(null);
+  }
+}
+
+function parseClientBanError(err: unknown): ActiveBanInfo | null {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  const idx = msg.indexOf(BAN_PREFIX);
+  if (idx === -1) return null;
+  try {
+    const parsed = JSON.parse(msg.slice(idx + BAN_PREFIX.length)) as Partial<ActiveBanInfo>;
+    const types = Array.isArray(parsed.types)
+      ? parsed.types.filter((t): t is BanType => t === "ip" || t === "chrome" || t === "pc")
+      : [];
+    return {
+      banned: true,
+      types,
+      reason: typeof parsed.reason === "string" ? parsed.reason : "Доступ заблоковано адміністрацією",
+      marker: typeof parsed.marker === "string" ? parsed.marker : null,
+    };
+  } catch {
+    return { banned: true, types: [], reason: "Доступ заблоковано адміністрацією", marker: null };
+  }
+}
+
+function rethrowAfterBanCheck(err: unknown): never {
+  const info = parseClientBanError(err);
+  if (info) {
+    applyBanInfoToUi(info);
+    throw new Error("Доступ до симулятора заблоковано адміністрацією");
+  }
+  throw err;
 }
 
 // When the server moves to a newer season, reload so the new bundle wipes local progress.
@@ -62,6 +134,7 @@ type PlayerStore = {
   secret: string;
   name: string;
   registered: boolean;
+  lastResetAt: number;
   setName: (name: string) => void;
 };
 
@@ -72,6 +145,7 @@ export const usePlayer = create<PlayerStore>()(
       secret: newSecret(),
       name: "",
       registered: false,
+      lastResetAt: 0,
       setName: (name) => set({ name }),
     }),
     {
@@ -85,6 +159,7 @@ export const usePlayer = create<PlayerStore>()(
           secret: typeof p.secret === "string" && SECRET_RE.test(p.secret) ? p.secret : current.secret,
           name: typeof p.name === "string" ? p.name : current.name,
           registered: Boolean(p.registered),
+          lastResetAt: typeof p.lastResetAt === "number" && Number.isFinite(p.lastResetAt) ? p.lastResetAt : 0,
         };
       },
       onRehydrateStorage: () => (state) => {
@@ -136,10 +211,22 @@ export function applyServerSnapshot(
   snap: PlayerSnapshot,
   options?: { seqOnly?: boolean; onlyIfNotBehind?: boolean },
 ): void {
+  const prevReset = usePlayer.getState().lastResetAt;
+  const isDemonetized = snap.demonetizedAt > 0 && snap.demonetizedAt > prevReset;
+
   usePlayer.setState((prev) => ({
     registered: true,
     name: snap.name.length >= 2 ? snap.name : prev.name,
+    lastResetAt: Math.max(prev.lastResetAt, snap.demonetizedAt),
   }));
+
+  if (isDemonetized) {
+    useGame.getState().resetAllProgress();
+    useGacha.getState().applyServerGacha(snap);
+    useGame.getState().applyServerGame({ spins: snap.spins, xp: snap.xp });
+    return;
+  }
+
   if (options?.seqOnly) {
     useGacha.setState((s) => (snap.seq > s.seq ? { seq: snap.seq } : s));
     return;
@@ -154,6 +241,23 @@ export function applyServerSnapshot(
 let sessionSynced = false;
 let inflightSession: Promise<PlayerSnapshot | null> | null = null;
 
+export async function refreshBanAccess(): Promise<ActiveBanInfo | null> {
+  if (typeof window === "undefined") return null;
+  try {
+    const telemetry = await collectTelemetry();
+    const info = await checkAccess({
+      data: {
+        id: usePlayer.getState().id,
+        telemetry,
+      },
+    });
+    applyBanInfoToUi(info);
+    return info;
+  } catch {
+    return null;
+  }
+}
+
 export async function ensureSessionSynced(force = false): Promise<PlayerSnapshot | null> {
   if (typeof window === "undefined") return null;
   if (sessionSynced && !force) return null;
@@ -167,18 +271,24 @@ export async function ensureSessionSynced(force = false): Promise<PlayerSnapshot
 
   const run = (async () => {
     const creds = getCredentials();
-    const snap = await initSession({
-      data: {
-        season: creds.season,
-        id: creds.id,
-        secret: creds.secret,
-        name: creds.name || undefined,
-        legacy: collectLegacySeed(),
-      },
-    });
-    sessionSynced = true;
-    applyServerSnapshot(snap);
-    return snap;
+    const telemetry = await collectTelemetry();
+    try {
+      const snap = await initSession({
+        data: {
+          season: creds.season,
+          id: creds.id,
+          secret: creds.secret,
+          name: creds.name || undefined,
+          legacy: collectLegacySeed(),
+          telemetry,
+        },
+      });
+      sessionSynced = true;
+      applyServerSnapshot(snap);
+      return snap;
+    } catch (err) {
+      rethrowAfterBanCheck(err);
+    }
   })().finally(() => {
     inflightSession = null;
   });
@@ -191,15 +301,41 @@ export function useSessionSync(ready: boolean, onHydrated?: (snap: PlayerSnapsho
   useEffect(() => {
     if (!ready) return;
     let active = true;
-    ensureSessionSynced()
-      .then((snap) => {
+
+    async function syncAll(forceSession = false) {
+      const info = await refreshBanAccess();
+      if (!active || info?.banned) return;
+      try {
+        const snap = await ensureSessionSynced(forceSession);
         if (active && snap && onHydrated) onHydrated(snap);
-      })
-      .catch(() => {
-        // Offline or unreachable DB — action handlers will surface errors on user interaction.
-      });
+      } catch {
+        // Offline or handled ban state.
+      }
+    }
+
+    void syncAll(false);
+
+    const onFocus = () => {
+      if (usePlayer.getState().registered) {
+        void syncAll(true);
+      } else {
+        void refreshBanAccess();
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    const iv = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (usePlayer.getState().registered) {
+        void syncAll(true);
+      } else {
+        void refreshBanAccess();
+      }
+    }, 15_000);
+
     return () => {
       active = false;
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(iv);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
@@ -210,19 +346,33 @@ function isConflictError(err: unknown): boolean {
   return msg.includes("CONFLICT");
 }
 
-async function runWithRetry<T>(action: (creds: ReturnType<typeof getCredentials>, seq: number) => Promise<T>): Promise<T> {
+async function runWithRetry<T>(
+  action: (
+    creds: ReturnType<typeof getCredentials>,
+    seq: number,
+    telemetry: Awaited<ReturnType<typeof collectTelemetry>>,
+  ) => Promise<T>,
+): Promise<T> {
   await ensureSessionSynced().catch(() => null);
+  const telemetry = await collectTelemetry();
   try {
-    return await action(getCredentials(), useGacha.getState().seq);
+    return await action(getCredentials(), useGacha.getState().seq, telemetry);
   } catch (err) {
+    if (parseClientBanError(err)) {
+      rethrowAfterBanCheck(err);
+    }
     if (!isConflictError(err)) throw err;
     await ensureSessionSynced(true);
-    return await action(getCredentials(), useGacha.getState().seq);
+    try {
+      return await action(getCredentials(), useGacha.getState().seq, telemetry);
+    } catch (retryErr) {
+      return rethrowAfterBanCheck(retryErr);
+    }
   }
 }
 
 export async function performSpin(): Promise<SpinExecutionResult> {
-  const res = await runWithRetry((creds, seq) =>
+  const res = await runWithRetry((creds, seq, telemetry) =>
     spinWheel({
       data: {
         season: creds.season,
@@ -230,6 +380,7 @@ export async function performSpin(): Promise<SpinExecutionResult> {
         secret: creds.secret,
         seq,
         name: creds.name || undefined,
+        telemetry,
       },
     }),
   );
@@ -241,9 +392,9 @@ export async function performSpin(): Promise<SpinExecutionResult> {
 }
 
 export async function performClearBlackout(): Promise<PlayerSnapshot> {
-  const snap = await runWithRetry((creds, seq) =>
+  const snap = await runWithRetry((creds, seq, telemetry) =>
     clearBlackoutServer({
-      data: { season: creds.season, id: creds.id, secret: creds.secret, seq },
+      data: { season: creds.season, id: creds.id, secret: creds.secret, seq, telemetry },
     }),
   );
   sessionSynced = true;
@@ -252,7 +403,7 @@ export async function performClearBlackout(): Promise<PlayerSnapshot> {
 }
 
 export async function performPull(count: 1 | 10): Promise<PullServerResult> {
-  const res = await runWithRetry((creds, seq) =>
+  const res = await runWithRetry((creds, seq, telemetry) =>
     pullBanner({
       data: {
         season: creds.season,
@@ -261,10 +412,12 @@ export async function performPull(count: 1 | 10): Promise<PullServerResult> {
         seq,
         count,
         name: creds.name || undefined,
+        telemetry,
       },
     }),
   );
   sessionSynced = true;
+  applyServerSnapshot(res.state, { seqOnly: true });
   useGacha.getState().applyServerGacha(res.state);
   useGacha.getState().setLastBatch(res.results);
   usePlayer.setState((prev) => ({
@@ -276,7 +429,7 @@ export async function performPull(count: 1 | 10): Promise<PullServerResult> {
 }
 
 export async function performClaimAid(): Promise<PlayerSnapshot> {
-  const snap = await runWithRetry((creds, seq) =>
+  const snap = await runWithRetry((creds, seq, telemetry) =>
     claimAidServer({
       data: {
         season: creds.season,
@@ -284,6 +437,7 @@ export async function performClaimAid(): Promise<PlayerSnapshot> {
         secret: creds.secret,
         seq,
         name: creds.name || undefined,
+        telemetry,
       },
     }),
   );
@@ -293,9 +447,9 @@ export async function performClaimAid(): Promise<PlayerSnapshot> {
 }
 
 export async function performExchangeShards(): Promise<PlayerSnapshot> {
-  const snap = await runWithRetry((creds, seq) =>
+  const snap = await runWithRetry((creds, seq, telemetry) =>
     exchangeShardsServer({
-      data: { season: creds.season, id: creds.id, secret: creds.secret, seq },
+      data: { season: creds.season, id: creds.id, secret: creds.secret, seq, telemetry },
     }),
   );
   sessionSynced = true;
@@ -306,9 +460,9 @@ export async function performExchangeShards(): Promise<PlayerSnapshot> {
 export async function performToggleEquip(
   unitId: string,
 ): Promise<{ status: "equipped" | "removed" | "full" | "locked"; state: PlayerSnapshot }> {
-  const res = await runWithRetry((creds, seq) =>
+  const res = await runWithRetry((creds, seq, telemetry) =>
     toggleEquipServer({
-      data: { season: creds.season, id: creds.id, secret: creds.secret, seq, unitId },
+      data: { season: creds.season, id: creds.id, secret: creds.secret, seq, unitId, telemetry },
     }),
   );
   sessionSynced = true;
@@ -317,9 +471,9 @@ export async function performToggleEquip(
 }
 
 export async function performSacrificeRook(): Promise<PlayerSnapshot> {
-  const snap = await runWithRetry((creds, seq) =>
+  const snap = await runWithRetry((creds, seq, telemetry) =>
     sacrificeRookServer({
-      data: { season: creds.season, id: creds.id, secret: creds.secret, seq },
+      data: { season: creds.season, id: creds.id, secret: creds.secret, seq, telemetry },
     }),
   );
   sessionSynced = true;
@@ -330,12 +484,17 @@ export async function performSacrificeRook(): Promise<PlayerSnapshot> {
 export async function performSetName(name: string): Promise<PlayerSnapshot> {
   await ensureSessionSynced().catch(() => null);
   const creds = getCredentials();
-  const snap = await setPlayerName({
-    data: { season: creds.season, id: creds.id, secret: creds.secret, name },
-  });
-  sessionSynced = true;
-  applyServerSnapshot(snap);
-  usePlayer.setState({ name: snap.name, registered: true });
-  void mutate(LEADERBOARD_KEY);
-  return snap;
+  const telemetry = await collectTelemetry();
+  try {
+    const snap = await setPlayerName({
+      data: { season: creds.season, id: creds.id, secret: creds.secret, name, telemetry },
+    });
+    sessionSynced = true;
+    applyServerSnapshot(snap);
+    usePlayer.setState({ name: snap.name, registered: true });
+    void mutate(LEADERBOARD_KEY);
+    return snap;
+  } catch (err) {
+    return rethrowAfterBanCheck(err);
+  }
 }

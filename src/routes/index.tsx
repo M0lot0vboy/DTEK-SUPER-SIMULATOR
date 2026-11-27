@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { mutate } from "swr";
-import { Zap, ZapOff, Plug, Sparkles } from "lucide-react";
+import { Zap, ZapOff, Plug, Sparkles, ShieldBan } from "lucide-react";
 import {
   SPIN_DURATION_NORMAL_MS,
   SPIN_DURATION_TURBO_MS,
@@ -26,6 +26,7 @@ import {
   applyServerSnapshot,
   performClearBlackout,
   performSpin,
+  useBanState,
   useSeasonGuard,
   useSessionSync,
 } from "@/lib/game/player";
@@ -162,6 +163,7 @@ function Home() {
   const offCount = useGame((s) => s.off);
   const achievements = useGame((s) => s.achievements);
   const gachaBadges = useGacha((s) => s.badges);
+  const ban = useBanState();
 
   useEffect(() => {
     migrateLegacy();
@@ -397,6 +399,45 @@ function Home() {
   const offShare = spins ? Math.round((offCount / spins) * 100) : 50;
   const batteryColor = battery > 50 ? "#4fae63" : battery > 20 ? "#e8a317" : "#d64545";
   const dark = blackout || doom;
+
+  if (ban.banned) {
+    const typeLabel: Record<string, string> = {
+      ip: "IP-бан",
+      chrome: "Chrome / Браузер-бан",
+      pc: "ПК / Пристрій-бан",
+    };
+    return (
+      <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-center px-5 py-10 text-center">
+        <div className="w-full rounded-2xl border border-off/40 bg-surface p-6 sm:p-8">
+          <div className="mx-auto flex size-14 items-center justify-center rounded-full border border-off/40 bg-off/15 text-off">
+            <ShieldBan className="size-7" />
+          </div>
+          <p className="font-display mt-4 text-xs tracking-[0.25em] text-off uppercase">
+            Античіт-система ДТЕК
+          </p>
+          <h1 className="font-display mt-2 text-2xl font-bold text-fg">ДОСТУП ЗАБЛОКОВАНО</h1>
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            {ban.reason || "Твій акаунт або пристрій заблоковано адміністрацією за порушення правил."}
+          </p>
+          {ban.types.length > 0 ? (
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              {ban.types.map((t) => (
+                <span
+                  key={t}
+                  className="rounded-lg border border-off/40 bg-off/15 px-3 py-1 font-mono text-xs text-off"
+                >
+                  {typeLabel[t] ?? t.toUpperCase()}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <p className="mt-6 border-t border-line pt-4 text-xs text-muted">
+            Спроба обійти блокування фіксується сервером. Звернись до адміністрації, якщо це помилка.
+          </p>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="relative mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 py-6 sm:px-6 sm:py-10">

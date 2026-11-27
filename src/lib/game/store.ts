@@ -35,6 +35,7 @@ export type Store = GameState & {
   refundResin: () => void;
   completeSpin: (outcome: Outcome, battery: number, serverStats?: { spins: number; xp: number }) => void;
   applyServerGame: (stats: { spins: number; xp: number }) => void;
+  resetAllProgress: () => void;
   applyBatteryDelta: (delta: number) => void;
   unlock: (id: string) => void;
   pull: (count: number) => PullResult[];
@@ -218,6 +219,11 @@ export const useGame = create<Store>()(
 
       applyServerGame: (stats: { spins: number; xp: number }) => {
         set({ spins: stats.spins, xp: stats.xp });
+      },
+
+      resetAllProgress: () => {
+        set({ ...initialState(), resinAt: 0 });
+        get().pushToast("Акаунт обнулено", "Адміністрація виконала AC Reset", "#d64545");
       },
 
       applyBatteryDelta: (delta: number) => {
