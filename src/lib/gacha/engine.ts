@@ -1,3 +1,4 @@
+import "@/lib/game/season";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { RESIN_MAX, type Outcome } from "@/lib/game/data";
