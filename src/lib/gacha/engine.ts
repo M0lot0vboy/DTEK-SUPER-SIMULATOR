@@ -14,9 +14,9 @@ import {
 } from "./pool";
 
 export const PULL_COST = 160;
-export const BASE_5 = 0.006;
+export const BASE_5 = 0.009;
 export const BASE_4 = 0.051;
-export const SOFT_PITY = 74;
+export const SOFT_PITY = 70;
 export const HARD_PITY = 90;
 export const PITY_4 = 10;
 export const MAX_LOADOUT = 3;
