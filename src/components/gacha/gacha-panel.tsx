@@ -104,7 +104,7 @@ export function GachaPanel({ ready }: { ready: boolean }) {
     const res = useGacha.getState().pull(count);
     if (!res) {
       const need = count * PULL_COST;
-      useGame.getState().pushToast("Мало кВт-гемів", `Треба ${need}. Крути колесо, проси допомогу або… магазин.`, "#d64545");
+      useGame.getState().pushToast("Мало кВт-гемів", `Треба ${need}. Крути колесо, проси допомогу або обміняй копіум.`, "#d64545");
       setView("shop");
       return;
     }
@@ -175,7 +175,7 @@ export function GachaPanel({ ready }: { ready: boolean }) {
           [
             ["banner", "банер"],
             ["codex", "кодекс"],
-            ["shop", "магазин"],
+            ["shop", "обмін"],
           ] as const
         ).map(([id, label]) => (
           <button

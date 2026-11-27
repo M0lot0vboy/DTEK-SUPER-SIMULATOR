@@ -104,7 +104,7 @@ function InspectDialog({ unit, onClose }: { unit: Unit; onClose: () => void }) {
     buff.drain !== 1 ? `Розряд у темряві: ${buff.drain < 1 ? "−" : "+"}${Math.round(Math.abs(1 - buff.drain) * 100)}%` : null,
     buff.gems ? `кВт-геми за крутку: +${Math.round(buff.gems * 100)}%` : null,
     buff.onBonus ? `Павербанк при світлі: +${buff.onBonus}%` : null,
-    buff.refund ? `Шанс повернути стабільність: ${Math.round(buff.refund * 100)}%` : null,
+    buff.refund ? `Шанс подвоїти кВт-геми: ${Math.round(buff.refund * 100)}%` : null,
   ].filter(Boolean);
 
   return (

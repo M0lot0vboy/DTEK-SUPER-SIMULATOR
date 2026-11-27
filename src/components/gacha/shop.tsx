@@ -1,17 +1,9 @@
-import { SHARDS_PER_TICKET, SHOP_PACKS, useGacha } from "@/lib/gacha/engine";
+import { SHARDS_PER_TICKET, useGacha } from "@/lib/gacha/engine";
 import { useGame } from "@/lib/game/store";
-import { sfxCash, sfxClick } from "@/lib/gacha/audio";
+import { sfxClick } from "@/lib/gacha/audio";
 
 export function Shop() {
-  const fakeMoney = useGacha((s) => s.fakeMoney);
   const shards = useGacha((s) => s.shards);
-
-  function buy(id: string) {
-    const pack = useGacha.getState().buyPack(id);
-    if (!pack) return;
-    sfxCash();
-    useGame.getState().pushToast(`+${pack.gems} кВт-гемів`, pack.roast, "#e8a317");
-  }
 
   function exchange() {
     sfxClick();
@@ -27,34 +19,7 @@ export function Shop() {
 
   return (
     <div>
-      <div className="flex items-center justify-between rounded-xl border border-off/40 bg-off/10 px-3 py-2">
-        <span className="text-xs text-fg">Витрачено фейкових грошей</span>
-        <span className="font-display text-lg text-off">${fakeMoney.toFixed(2)}</span>
-      </div>
-
-      <ul className="mt-3 grid gap-2">
-        {SHOP_PACKS.map((p, i) => (
-          <li key={p.id}>
-            <button
-              type="button"
-              onClick={() => buy(p.id)}
-              className={`relative flex w-full items-center justify-between gap-3 overflow-hidden rounded-xl border-2 p-3 text-left transition-transform active:scale-[0.98] ${
-                i === 0 ? "border-amber bg-[linear-gradient(120deg,#3a2a08,#221f1a)]" : "border-line bg-surface"
-              }`}
-            >
-              <span className="min-w-0">
-                <span className="font-display inline-block rounded bg-off px-1.5 py-0.5 text-[10px] font-extrabold text-fg">{p.tag}</span>
-                <span className="font-display mt-1 block text-sm text-fg">{p.name}</span>
-                <span className="mt-0.5 block text-xs text-amber">{p.gems.toLocaleString("uk-UA")} кВт-гемів</span>
-              </span>
-              <span className="font-display shrink-0 rounded-full bg-amber px-3 py-2 text-sm font-extrabold text-ink">${p.price}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      <p className="mt-2 text-center text-[10px] text-muted">Гроші фейкові. Біль справжній. Нічого не списується.</p>
-
-      <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#a879f0]/40 bg-surface p-3">
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-[#a879f0]/40 bg-surface p-3">
         <div>
           <p className="font-display text-sm text-[#a879f0]">Обмін копіуму</p>
           <p className="text-xs text-muted">
