@@ -1,4 +1,4 @@
-import "@/lib/game/season";
+import { ensureSeasonReset } from "@/lib/game/season";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
@@ -19,6 +19,8 @@ import {
   todayKey,
   type Outcome,
 } from "./data";
+
+ensureSeasonReset();
 
 export type Toast = { key: number; name: string; desc: string; color?: string };
 
