@@ -1,4 +1,4 @@
-import "@/lib/game/season";
+import { ensureSeasonReset } from "@/lib/game/season";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { RESIN_MAX, type Outcome } from "@/lib/game/data";
@@ -13,6 +13,8 @@ import {
   type Rarity,
   type Unit,
 } from "./pool";
+
+ensureSeasonReset();
 
 export const PULL_COST = 160;
 export const BASE_5 = 0.009;

@@ -1,4 +1,4 @@
-import { SEASON } from "@/lib/game/season";
+import { ensureSeasonReset, SEASON } from "@/lib/game/season";
 import { useEffect, useRef } from "react";
 import useSWR from "swr";
 import { create } from "zustand";
@@ -12,8 +12,18 @@ import { getSeason, submitScore } from "@/lib/leaderboard";
 
 // When the server moves to a newer season, reload so the new bundle wipes local progress.
 export function useSeasonGuard(): void {
+  ensureSeasonReset();
   const { data } = useSWR("season", () => getSeason(), { refreshInterval: 30_000 });
   useEffect(() => {
+    try {
+      if (window.localStorage.getItem("dtek-reset-reload") === "1") {
+        window.localStorage.removeItem("dtek-reset-reload");
+        window.location.reload();
+        return;
+      }
+    } catch {
+      // Storage may be unavailable in private browsing modes.
+    }
     if (typeof data === "number" && data > SEASON) window.location.reload();
   }, [data]);
 }
