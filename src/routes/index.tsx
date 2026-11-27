@@ -15,7 +15,7 @@ import { Toasts } from "@/components/game/toasts";
 import { DailyModal } from "@/components/game/daily-modal";
 import { GachaPanel } from "@/components/gacha/gacha-panel";
 import { afterSpinGacha, loadoutBuffs, useGacha } from "@/lib/gacha/engine";
-import { useLeaderboardSync } from "@/lib/game/player";
+import { useLeaderboardSync, useSeasonGuard } from "@/lib/game/player";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -151,6 +151,7 @@ function Home() {
   const [ready, setReady] = useState(false);
   const [showDaily, setShowDaily] = useState(false);
   useLeaderboardSync(ready);
+  useSeasonGuard();
   const [note, setNote] = useState("");
   const [bonus, setBonus] = useState("");
   const [flash, setFlash] = useState<Outcome | null>(null);

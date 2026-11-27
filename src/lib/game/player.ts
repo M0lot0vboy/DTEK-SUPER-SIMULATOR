@@ -1,4 +1,6 @@
+import { SEASON } from "@/lib/game/season";
 import { useEffect, useRef } from "react";
+import useSWR from "swr";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { mutate } from "swr";
@@ -6,7 +8,15 @@ import { useGame } from "@/lib/game/store";
 import { useGacha } from "@/lib/gacha/engine";
 import { UNIT_BY_ID } from "@/lib/gacha/pool";
 import { levelFromXp } from "@/lib/game/data";
-import { submitScore } from "@/lib/leaderboard";
+import { getSeason, submitScore } from "@/lib/leaderboard";
+
+// When the server moves to a newer season, reload so the new bundle wipes local progress.
+export function useSeasonGuard(): void {
+  const { data } = useSWR("season", () => getSeason(), { refreshInterval: 30_000 });
+  useEffect(() => {
+    if (typeof data === "number" && data > SEASON) window.location.reload();
+  }, [data]);
+}
 
 type PlayerStore = {
   id: string;
@@ -51,7 +61,7 @@ export function useLeaderboardSync(ready: boolean): void {
 
   useEffect(() => {
     if (!ready || name.length < 2) return;
-    const payload = { id, name, spins, level: levelFromXp(xp), fives: countFives(copies), pulls };
+    const payload = { season: SEASON, id, name, spins, level: levelFromXp(xp), fives: countFives(copies), pulls };
     const key = JSON.stringify(payload);
     if (key === lastSent.current) return;
     const timer = window.setTimeout(() => {

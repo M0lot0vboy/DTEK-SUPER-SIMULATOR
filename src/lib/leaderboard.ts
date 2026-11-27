@@ -1,4 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
+import { SEASON } from "@/lib/game/season";
+
+export const getSeason = createServerFn({ method: "GET" }).handler(async () => SEASON);
 
 export type LeaderRow = {
   id: string;
@@ -38,6 +41,7 @@ export function cleanName(value: unknown): string {
 
 function validateScore(data: unknown): ScoreInput {
   const d = (data ?? {}) as Record<string, unknown>;
+  if (Number(d.season) !== SEASON) throw new Error("Outdated season — reload the game");
   const id = String(d.id ?? "");
   if (!ID_RE.test(id)) throw new Error("Invalid player id");
   const name = cleanName(d.name);
@@ -57,16 +61,22 @@ export const submitScore = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { getSql } = await import("@/lib/db");
     const sql = await getSql();
-    // Stats only ever move up, so a stale tab can't wipe a newer score.
+    // Within a season stats only move up, so a stale tab can't wipe a newer score.
+    // A row from an older season is overwritten outright.
     await sql`
-      insert into leaderboard_players (id, name, spins, level, fives, pulls, updated_at)
-      values (${data.id}, ${data.name}, ${data.spins}, ${data.level}, ${data.fives}, ${data.pulls}, now())
+      insert into leaderboard_players (id, name, spins, level, fives, pulls, season, updated_at)
+      values (${data.id}, ${data.name}, ${data.spins}, ${data.level}, ${data.fives}, ${data.pulls}, ${SEASON}, now())
       on conflict (id) do update set
         name = excluded.name,
-        spins = greatest(leaderboard_players.spins, excluded.spins),
-        level = greatest(leaderboard_players.level, excluded.level),
-        fives = greatest(leaderboard_players.fives, excluded.fives),
-        pulls = greatest(leaderboard_players.pulls, excluded.pulls),
+        spins = case when leaderboard_players.season = excluded.season
+          then greatest(leaderboard_players.spins, excluded.spins) else excluded.spins end,
+        level = case when leaderboard_players.season = excluded.season
+          then greatest(leaderboard_players.level, excluded.level) else excluded.level end,
+        fives = case when leaderboard_players.season = excluded.season
+          then greatest(leaderboard_players.fives, excluded.fives) else excluded.fives end,
+        pulls = case when leaderboard_players.season = excluded.season
+          then greatest(leaderboard_players.pulls, excluded.pulls) else excluded.pulls end,
+        season = excluded.season,
         updated_at = now()
     `;
     return { ok: true };
@@ -86,6 +96,7 @@ export const getLeaderboard = createServerFn({ method: "GET" }).handler(async ()
   }>`
     select id, name, spins, level, fives, pulls, updated_at
     from leaderboard_players
+    where season = ${SEASON}
     order by spins desc, fives desc, updated_at asc
     limit 50
   `;
